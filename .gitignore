@@ -201,6 +201,10 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# LiveSoul runtime artifacts
+runtime/
+runtime-sample.png
+
 # Marimo
 marimo/_static/
 marimo/_lsp/
