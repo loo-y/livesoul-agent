@@ -2,28 +2,38 @@
 
 ## 当前状态
 
-项目已经从纯文档状态落成了一个可运行的 Python 原型，主链路完整：
+项目已经从纯文档状态落成了一个可运行的 Python 原型，当前主链路是：
 
 1. 截图当前屏幕
 2. 启动时手动框选弹幕区域
-3. OCR 识别弹幕
-4. OCR 失败时回退到视觉模型
+3. 优先调用视觉模型识别弹幕
+4. 视觉模型超时或失败时回退到 OCR
 5. 调用 AI 生成回复
 6. 调用 TTS 播放回复
 
-默认设计目标是“先跑起来，再替换真实能力”。
+当前流程已经改成严格串行：
+
+- 一次只处理一帧完整流程
+- 前一轮 TTS 未结束前，不会开始下一轮截图
+- 如果当前识别出的整块弹幕文本与上一轮完全一致，会直接跳过 LLM 和 TTS
 
 ## 这次已经完成的改动
 
-- 建立了项目代码结构和运行入口
-- 实现了配置加载、日志和异步主循环
-- 实现了截图模块和弹幕区域裁剪
-- 实现了 OCR 模块，支持 EasyOCR / pytesseract
-- 实现了视觉模型 fallback，使用 OpenAI-compatible API
-- 实现了 AI Agent，动态读取 `agent_config/SOUL.md`、`IDENTITY.md`、`USER.md`
-- 实现了 TTS 模块，支持 `console`、`openai`、`edge`、`pyttsx3`
-- 默认改成每次启动时手动框选弹幕区域，不再依赖 `.env` 中的固定坐标
-- 明确补齐了 macOS 支持说明和启动诊断
+- 把 LLM 接口从 `responses.create(...)` 改成了 `chat.completions.create(...)`，已适配当前使用的 iflow 兼容接口
+- 验证并保留了视觉模型主路径，当前真实截图场景下明显优于 OCR
+- 把识别策略改成“视觉优先，超时后回退到 OCR”
+- 修复了 EasyOCR 的本地模型损坏和输入类型问题，OCR 已恢复为可运行回退方案
+- 把运行时从多队列并发改成串行流水线，避免 TTS 未播完就开始下一轮
+- 增加了本地记忆：
+  - 最近一次识别出的弹幕快照
+  - 最近几轮 `(弹幕 -> 回复)` 上下文
+- 运行记忆已持久化到：
+  - `runtime/memory/session_memory.json`
+  - `runtime/memory/session_memory.html`
+- 增加了 Windows 全局快捷键 `Ctrl+Alt+Q`，可快速停止程序
+- 接入并验证了 MiniMax TTS
+- 配置项已从 `TTS_API_BASE` 迁移为 `TTS_API_ENDPOINT`，并保留旧字段兼容
+- `.env.example` 已同步更新
 
 ## 关键文件
 
@@ -35,74 +45,60 @@
 - 视觉回退：[src/vision_module.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/vision_module.py)
 - AI Agent：[src/ai_agent.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/ai_agent.py)
 - TTS：[src/tts_module.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/tts_module.py)
+- 全局热键：[src/hotkey_listener.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/hotkey_listener.py)
 - 平台检查：[src/platform_support.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/platform_support.py)
 
 ## 当前配置约定
 
-`.env.example` 已清理，不再暴露 `BARRAGE_REGION_X/Y/W/H` 给新用户。
-
-当前推荐配置方式：
+推荐配置方式：
 
 - `AUTO_SELECT_REGION=true`
 - 每次启动程序后手动框选弹幕区域
-- `SCREENSHOT_INTERVAL` 控制截图频率
-- `OCR_CONFIDENCE_THRESHOLD` 控制 OCR 回退阈值
-- `TTS_PROVIDER` 控制 TTS 方案
+- `VISION_TIMEOUT_SECONDS` 控制视觉识别超时
+- `TTS_PROVIDER=minimaxi`
+- `TTS_API_ENDPOINT=https://api.minimaxi.com/v1/t2a_v2`
+- `MEMORY_DIR=runtime/memory`
 
-保留了对旧坐标配置的代码兼容，但不再推荐继续使用。
-
-## 平台支持说明
-
-### macOS
-
-已明确支持，但要注意：
-
-- 首次运行前需要开启 `Screen Recording`
-- 如果框选器不能弹出，通常是 `tkinter` 不可用
-- 如果用 `pytesseract`，需要本机安装 `tesseract`
-- TTS 播放默认可走 `afplay`
-
-### Windows
-
-已明确支持，但要注意：
-
-- OBS 或投屏窗口不能最小化
-- 截图区域每次启动需要重新手动框选
+仍保留对旧字段 `TTS_API_BASE` 的兼容，但不再推荐继续使用。
 
 ## 已做过的验证
 
-- `python3 -m compileall src` 通过
+- `python -m compileall src` 通过
 - `from src.main import LiveSoulRuntime` 导入通过
-- 截图链路做过本地 smoke test，能生成裁剪后的图片文件
+- 视觉模型真实调用通过
+- iflow LLM 真实调用通过
+- MiniMax TTS 真实调用通过，已成功生成 MP3 文件
+- 真实直播截图验证过：视觉模型识别质量明显优于 OCR
+- 运行记忆文件会自动生成：
+  - `runtime/memory/session_memory.json`
+  - `runtime/memory/session_memory.html`
 
-## 已知问题 / 还没做的事
+## 当前已知问题 / 边界
 
 - 还没有真正做“窗口级捕获”，当前仍是整屏截图后裁剪
-- 区域框选器目前是基础版本，还可以继续增强交互体验
-- OCR 目前偏原型，未做更细的去重、分行归并和聊天气泡过滤
-- TTS 播放还没接 OBS 音频路由，只是系统播放
+- OCR 可作为回退，但在真实弹幕场景下质量仍明显不如视觉模型
+- `pytesseract` 依赖系统 `tesseract`，当前这台机器未装
+- TTS 播放目前仍是系统播放，还没接 OBS 音频路由
 - 没有自动化测试
 - 还没有打包成桌面应用
 
 ## 下次建议优先继续的方向
 
-1. 增强区域框选器
-   - 显示实时坐标和宽高
-   - 支持重选
-   - 支持多显示器更稳定的选择体验
-
-2. 优化截图能力
+1. 优化截图能力
    - 支持指定窗口捕获
    - 对 OBS / 投屏窗口做自动定位
 
-3. 优化弹幕识别
-   - 做文本去重和节流
-   - 提升 OCR 预处理
-   - 对连续弹幕做批处理
+2. 优化 LLM 层策略
+   - 在提示词层面对系统提示、进场提示、重复弹幕做更细的筛选
+   - 调整最近上下文的组织方式，减少机械重复
 
-4. 优化语音链路
+3. 优化语音链路
    - 支持更稳定的本地播放
    - 接入 OBS 可直接使用的音频输出方式
+
+4. 提升可运维性
+   - 加自动化测试
+   - 增加更清晰的日志和运行状态面板
 
 ## 如何继续启动项目
 
@@ -125,3 +121,8 @@ pip install -r requirements.txt
 copy .env.example .env
 python -m src.main
 ```
+
+### 停止方式
+
+- 终端按 `Ctrl+C`
+- Windows 下按 `Ctrl+Alt+Q`

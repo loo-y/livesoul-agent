@@ -26,6 +26,7 @@ def _env_optional_int(name: str) -> int | None:
 @dataclass(slots=True)
 class AppConfig:
     ocr_confidence_threshold: float
+    vision_timeout_seconds: float
     screenshot_interval: float
     barrage_region_x: int | None
     barrage_region_y: int | None
@@ -44,9 +45,10 @@ class AppConfig:
     tts_provider: str
     tts_api_key: str | None
     tts_model_name: str
-    tts_api_base: str
+    tts_api_endpoint: str | None
     tts_voice: str
     tts_output_dir: Path
+    memory_dir: Path
     agent_config_dir: Path
     log_level: str
     dedup_window_seconds: int
@@ -76,8 +78,20 @@ def load_config(env_path: str | Path | None = None) -> AppConfig:
         load_dotenv()
 
     base_dir = Path.cwd()
+    tts_provider = os.getenv("TTS_PROVIDER", "console").lower()
+    tts_api_endpoint = os.getenv("TTS_API_ENDPOINT") or None
+    legacy_tts_api_base = os.getenv("TTS_API_BASE") or None
+    if tts_api_endpoint is None:
+        if tts_provider == "openai":
+            tts_api_endpoint = legacy_tts_api_base or "https://api.openai.com/v1"
+        elif tts_provider == "minimaxi":
+            tts_api_endpoint = legacy_tts_api_base or "https://api.minimaxi.com/v1/t2a_v2"
+        else:
+            tts_api_endpoint = legacy_tts_api_base
+
     config = AppConfig(
         ocr_confidence_threshold=_env_float("OCR_CONFIDENCE_THRESHOLD", 0.8),
+        vision_timeout_seconds=_env_float("VISION_TIMEOUT_SECONDS", 300.0),
         screenshot_interval=_env_float("SCREENSHOT_INTERVAL", 0.5),
         barrage_region_x=_env_optional_int("BARRAGE_REGION_X"),
         barrage_region_y=_env_optional_int("BARRAGE_REGION_Y"),
@@ -93,18 +107,20 @@ def load_config(env_path: str | Path | None = None) -> AppConfig:
         llm_api_key=os.getenv("LLM_API_KEY") or None,
         llm_model_name=os.getenv("LLM_MODEL_NAME", "gpt-4.1-mini"),
         llm_api_base=os.getenv("LLM_API_BASE", "https://api.openai.com/v1"),
-        tts_provider=os.getenv("TTS_PROVIDER", "console").lower(),
+        tts_provider=tts_provider,
         tts_api_key=os.getenv("TTS_API_KEY") or None,
         tts_model_name=os.getenv("TTS_MODEL_NAME", "gpt-4o-mini-tts"),
-        tts_api_base=os.getenv("TTS_API_BASE", "https://api.openai.com/v1"),
+        tts_api_endpoint=tts_api_endpoint,
         tts_voice=os.getenv("TTS_VOICE", "alloy"),
         tts_output_dir=base_dir / os.getenv("TTS_OUTPUT_DIR", "runtime/audio"),
+        memory_dir=base_dir / os.getenv("MEMORY_DIR", "runtime/memory"),
         agent_config_dir=base_dir / os.getenv("AGENT_CONFIG_DIR", "agent_config"),
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
         dedup_window_seconds=_env_int("DEDUP_WINDOW_SECONDS", 8),
         queue_maxsize=_env_int("QUEUE_MAXSIZE", 50),
     )
     config.tts_output_dir.mkdir(parents=True, exist_ok=True)
+    config.memory_dir.mkdir(parents=True, exist_ok=True)
     return config
 
 

@@ -2,14 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
 logger = logging.getLogger(__name__)
 
 
 class OCRModule:
+    def __init__(self) -> None:
+        self._easyocr_reader = None
+        self._easyocr_unavailable = False
+        self._tesseract_available: bool | None = None
+
     async def recognize(self, image_path: Path) -> tuple[str, float, str]:
         return await asyncio.to_thread(self._recognize_sync, image_path)
 
@@ -33,16 +40,26 @@ class OCRModule:
         return image
 
     def _run_easyocr(self, image: Image.Image) -> tuple[str, float] | None:
-        try:
-            import easyocr
-        except Exception:
+        if self._easyocr_unavailable:
             return None
 
         try:
-            reader = easyocr.Reader(["ch_sim", "en"], gpu=False)
-            result = reader.readtext(image)
+            import easyocr
+        except Exception:
+            self._easyocr_unavailable = True
+            return None
+
+        try:
+            if self._easyocr_reader is None:
+                self._easyocr_reader = easyocr.Reader(
+                    ["ch_sim", "en"],
+                    gpu=False,
+                    download_enabled=False,
+                )
+            result = self._easyocr_reader.readtext(np.array(image))
         except Exception as exc:
             logger.warning("EasyOCR failed: %s", exc)
+            self._easyocr_unavailable = True
             return None
 
         if not result:
@@ -58,6 +75,14 @@ class OCRModule:
         try:
             import pytesseract
         except Exception:
+            return None
+
+        if self._tesseract_available is None:
+            self._tesseract_available = shutil.which("tesseract") is not None
+            if not self._tesseract_available:
+                logger.warning("Tesseract binary is unavailable; skipping pytesseract fallback.")
+
+        if not self._tesseract_available:
             return None
 
         try:

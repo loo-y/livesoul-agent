@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import binascii
 import logging
 import os
 import platform
 import subprocess
 from datetime import datetime
 from pathlib import Path
+
+import requests
 
 from .config import AppConfig
 
@@ -22,7 +25,7 @@ class TTSModule:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
         self.client = (
-            OpenAI(api_key=config.tts_api_key, base_url=config.tts_api_base)
+            OpenAI(api_key=config.tts_api_key, base_url=config.tts_api_endpoint)
             if config.tts_provider == "openai" and config.tts_api_key and OpenAI is not None
             else None
         )
@@ -35,6 +38,11 @@ class TTSModule:
             return await asyncio.to_thread(self._speak_with_pyttsx3, text)
         if self.config.tts_provider == "edge":
             return await self._speak_with_edge(text)
+        if self.config.tts_provider == "minimaxi":
+            if not self.config.tts_api_key:
+                logger.warning("MiniMax TTS is selected but API key is missing.")
+                return None
+            return await asyncio.to_thread(self._speak_with_minimaxi, text)
         if self.config.tts_provider == "openai":
             if self.client is None:
                 logger.warning("OpenAI TTS is selected but API key is missing.")
@@ -51,6 +59,46 @@ class TTSModule:
             input=text,
         ) as response:
             response.stream_to_file(output)
+        self._play_file(output)
+        return output
+
+    def _speak_with_minimaxi(self, text: str) -> Path:
+        output = self._output_path("mp3")
+        endpoint = self.config.tts_api_endpoint or "https://api.minimaxi.com/v1/t2a_v2"
+        response = requests.post(
+            endpoint,
+            headers={
+                "Authorization": f"Bearer {self.config.tts_api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": self.config.tts_model_name,
+                "text": text,
+                "stream": False,
+                "voice_setting": {
+                    "voice_id": self.config.tts_voice,
+                    "speed": 1,
+                    "vol": 1,
+                    "pitch": 0,
+                },
+                "audio_setting": {
+                    "sample_rate": 32000,
+                    "bitrate": 128000,
+                    "format": "mp3",
+                    "channel": 1,
+                },
+                "pronunciation_dict": {"tone": []},
+                "subtitle_enable": False,
+                "output_format": "hex",
+            },
+            timeout=120,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        audio_hex = payload.get("data", {}).get("audio", "")
+        if not audio_hex:
+            raise RuntimeError(f"MiniMax TTS response did not contain audio data: {payload}")
+        output.write_bytes(binascii.unhexlify(audio_hex))
         self._play_file(output)
         return output
 

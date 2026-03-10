@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from typing import Sequence
 
 from .config import AppConfig
 
@@ -40,22 +41,44 @@ class AIAgent:
             else None
         )
 
-    async def generate_reply(self, barrage_text: str) -> str:
+    async def generate_reply(
+        self,
+        barrage_text: str,
+        recent_context: Sequence[tuple[str, str]] | None = None,
+    ) -> str:
         soul_prompt = self.soul_store.load_prompt()
         if self.client is None:
             return self._fallback_reply(barrage_text)
-        return await asyncio.to_thread(self._generate_reply_sync, soul_prompt, barrage_text)
+        return await asyncio.to_thread(
+            self._generate_reply_sync,
+            soul_prompt,
+            barrage_text,
+            list(recent_context or []),
+        )
 
-    def _generate_reply_sync(self, soul_prompt: str, barrage_text: str) -> str:
-        response = self.client.responses.create(
+    def _generate_reply_sync(
+        self,
+        soul_prompt: str,
+        barrage_text: str,
+        recent_context: list[tuple[str, str]],
+    ) -> str:
+        context_blocks = []
+        for index, (recognized_text, reply_text) in enumerate(recent_context, start=1):
+            context_blocks.append(
+                f"Round {index} barrage:\n{recognized_text}\nRound {index} reply:\n{reply_text}"
+            )
+        context_text = "\n\n".join(context_blocks) if context_blocks else "No recent dialogue context."
+        response = self.client.chat.completions.create(
             model=self.config.llm_model_name,
-            input=[
+            messages=[
                 {
                     "role": "system",
                     "content": (
                         f"{soul_prompt}\n\n"
                         "Generate one short spoken reply for the live stream. "
-                        "Keep it concise, safe, and natural for voice output."
+                        "Keep it concise, safe, and natural for voice output.\n\n"
+                        "Avoid repeating the same wording as recent replies unless the context truly requires it.\n"
+                        f"Recent dialogue context:\n{context_text}"
                     ),
                 },
                 {
@@ -64,7 +87,8 @@ class AIAgent:
                 },
             ],
         )
-        return response.output_text.strip()
+        message = response.choices[0].message.content or ""
+        return message.strip()
 
     def _fallback_reply(self, barrage_text: str) -> str:
         preview = barrage_text.replace("\n", " ").strip()
