@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +19,7 @@ class ScreenshotCapture:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
         self.runtime_dir = Path("runtime/frames")
+        self.region_state_path = Path("runtime/current_region.json")
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
 
     async def capture_frame(self) -> FramePayload:
@@ -63,11 +65,30 @@ class ScreenshotCapture:
             ) from exc
 
     def _crop_barrage_region(self, image: Image.Image) -> Image.Image:
+        self._refresh_region_from_runtime_state()
         region = self.config.barrage_region
         if region is None:
             raise RuntimeError("Barrage region is not configured.")
         x, y, w, h = region
         return image.crop((x, y, x + w, y + h))
+
+    def _refresh_region_from_runtime_state(self) -> None:
+        if not self.region_state_path.exists():
+            return
+        try:
+            payload = json.loads(self.region_state_path.read_text(encoding="utf-8"))
+            region = (
+                int(payload["x"]),
+                int(payload["y"]),
+                int(payload["w"]),
+                int(payload["h"]),
+            )
+        except Exception:
+            return
+        self.config.barrage_region_x = region[0]
+        self.config.barrage_region_y = region[1]
+        self.config.barrage_region_w = region[2]
+        self.config.barrage_region_h = region[3]
 
     def _build_capture_error(self, message: str, exc: Exception) -> str:
         system = platform.system().lower()

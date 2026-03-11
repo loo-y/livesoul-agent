@@ -5,6 +5,7 @@ import logging
 import platform
 import subprocess
 import tempfile
+from pathlib import Path
 from typing import Any
 
 from PIL import Image, ImageTk
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 class RegionSelector:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
+        self.region_state_path = Path("runtime/current_region.json")
 
     def select_region(self) -> tuple[int, int, int, int]:
         if self.config.screenshot_image_path:
@@ -31,8 +33,19 @@ class RegionSelector:
         self.config.barrage_region_y = region[1]
         self.config.barrage_region_w = region[2]
         self.config.barrage_region_h = region[3]
+        self._persist_region(region)
         logger.info("Selected barrage region for current session: %s", region)
         return region
+
+    def _persist_region(self, region: tuple[int, int, int, int]) -> None:
+        self.region_state_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "x": region[0],
+            "y": region[1],
+            "w": region[2],
+            "h": region[3],
+        }
+        self.region_state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _select_region(self, image: Image.Image) -> tuple[int, int, int, int]:
         try:

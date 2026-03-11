@@ -17,6 +17,8 @@
 - 前一轮 TTS 未结束前，不会开始下一轮截图
 - 如果当前识别出的整块弹幕文本与上一轮完全一致，会直接跳过 LLM 和 TTS
 
+同时，项目现在已经有第一版 Windows 桌面 GUI，可直接在界面里启动/停止程序、编辑提示词、查看日志、显示监控框，并在运行中拖动监控区域位置。
+
 ## 这次已经完成的改动
 
 - 把 LLM 接口从 `responses.create(...)` 改成了 `chat.completions.create(...)`，已适配当前使用的 iflow 兼容接口
@@ -33,6 +35,7 @@
 - 增加了 Windows 全局快捷键 `Ctrl+Alt+Q`，可快速停止程序
 - 接入并验证了 MiniMax TTS
 - 新增并验证了 SiliconFlow TTS
+- 新增了第一版桌面 GUI 入口 `src/gui_app.py`
 - 配置项已从 `TTS_API_BASE` 迁移为 `TTS_API_ENDPOINT`，并保留旧字段兼容
 - `.env.example` 已同步更新
 
@@ -46,8 +49,10 @@
 - 视觉回退：[src/vision_module.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/vision_module.py)
 - AI Agent：[src/ai_agent.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/ai_agent.py)
 - TTS：[src/tts_module.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/tts_module.py)
+- GUI：[src/gui_app.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/gui_app.py)
 - 全局热键：[src/hotkey_listener.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/hotkey_listener.py)
 - 平台检查：[src/platform_support.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/platform_support.py)
+- GUI 规划：[GUI_PLAN.md](/Users/luyi/Code/GithubCode/livesoul-agent/GUI_PLAN.md)
 
 ## 当前配置约定
 
@@ -75,6 +80,15 @@
 
 - `python -m compileall src` 通过
 - `from src.main import LiveSoulRuntime` 导入通过
+- `src/gui_app.py` 已加入第一版 GUI 入口
+- 已安装 `PySide6`
+- GUI 冒烟验证通过：主窗口可以成功拉起并自动退出
+- GUI 实测通过：
+  - 可以启动 / 停止 runtime
+  - 可以通过 GUI 完成区域选择并进入主循环
+  - 可以显示监控区域透明描边
+  - 监控框在当前机器上已校准到基本贴合选区
+  - 可以在运行中拖动监控框位置，并让后续截图区域跟随
 - 视觉模型真实调用通过
 - iflow LLM 真实调用通过
 - MiniMax TTS 真实调用通过，已成功生成 MP3 文件
@@ -93,6 +107,8 @@
 - `pytesseract` 依赖系统 `tesseract`，当前这台机器未装
 - TTS 播放目前仍是系统播放，还没接 OBS 音频路由
 - SiliconFlow 如果使用 `mp3`，采样率必须是 `32000` 或 `44100`
+- GUI 当前只支持拖动监控框位置，不支持直接拖动改变宽高
+- GUI 当前已经较可用，但文案、布局、缩放与交互细节还需要继续打磨
 - 没有自动化测试
 - 还没有打包成桌面应用
 
@@ -173,9 +189,77 @@
    - 最终体验目标应是：
      - 用户下载安装
      - 双击启动
-     - 首次运行自动准备依赖
-     - 后续直接使用
+   - 首次运行自动准备依赖
+   - 后续直接使用
    - 不应把当前这种开发态命令行启动方式暴露给最终用户
+
+### 2026-03-12 这次实际踩到的问题
+
+- 第一版 GUI 做出来后，运行时确实可以从界面启动，但还暴露了几个非常具体的问题：
+  - GUI 允许选择与当前项目实际不匹配的 TTS provider，导致 `.env` 被写成 `TTS_PROVIDER=openai`、但 endpoint / model 仍然是 SiliconFlow 的值，运行时在 TTS 阶段返回 `openai.NotFoundError: Not Found`
+  - 监控框最初依赖日志里的 `Selected barrage region...` 文本读取选区坐标，但当 `.env` 的 `LOG_LEVEL=WARNING` 时，这条 `INFO` 日志根本不会输出，所以监控框完全不显示
+  - 监控框在 Windows DPI 缩放场景下出现坐标偏移和尺寸放大，导致显示位置与真实截图区域不一致
+  - 用户提出直播场景需要“始终知道当前截图区域在哪”，因此光有一次性选区还不够，需要常驻描边
+  - 用户进一步提出直播中希望“直接拖动监控区域”，这要求拖动不只是改 GUI 浮层，而必须真实影响后续截图裁剪
+
+### 2026-03-12 原因判断与结论
+
+- TTS 报错不是 SiliconFlow 服务本身故障，而是 GUI 当前表单允许写入一组自相矛盾的 TTS 配置。
+- 监控框不显示的根因不是浮层绘制失败，而是它最初依赖日志获取坐标，而日志级别配置把这条关键日志过滤掉了。
+- 监控框位置偏移不是故意留安全边距，而是 Windows 屏幕缩放导致“截图物理像素坐标”和“Qt 浮层逻辑坐标”不在同一坐标系。
+- 如果要满足“运行中拖动监控区域”的需求，必须把当前区域坐标从“GUI 的临时状态”提升成运行时和 GUI 共用的持久化状态。
+
+### 2026-03-12 这次已经落地的修复
+
+- [src/gui_app.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/gui_app.py)
+  - 新增第一版 `PySide6` 桌面 GUI。
+  - 中文化了主要界面文案、状态提示、按钮和页签。
+  - 支持启动 / 停止 runtime、编辑提示词、编辑常用配置、查看日志和预览。
+  - API Key 输入框新增“显示 / 隐藏”切换。
+  - 新增窗口置顶。
+  - 新增监控框显示开关。
+  - 新增“拖动监控框”模式，可在运行中直接拖动当前监控区域位置。
+  - TTS provider 下拉已收敛为当前项目实际使用的 `minimaxi` / `siliconflow`。
+  - 如果 `.env` 里残留旧 provider，GUI 会自动回退到安全值并提示用户。
+- [src/region_selector.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/region_selector.py)
+  - 选区完成后会把当前区域坐标持久化到 `runtime/current_region.json`。
+- [src/screenshot.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/screenshot.py)
+  - 每轮截图裁剪前都会重新读取 `runtime/current_region.json`。
+  - 这样 GUI 拖动监控框后，后续截图会立即跟随新位置，不需要重启。
+- [requirements.txt](/Users/luyi/Code/GithubCode/livesoul-agent/requirements.txt)
+  - 新增 `PySide6` 依赖。
+- [README.md](/Users/luyi/Code/GithubCode/livesoul-agent/README.md)
+  - 新增 GUI 入口说明和当前支持能力说明。
+- [GUI_PLAN.md](/Users/luyi/Code/GithubCode/livesoul-agent/GUI_PLAN.md)
+  - 单独记录了 GUI 的产品目标、结构规划和后续路线。
+
+### 2026-03-12 当前阶段的结论
+
+- 现在项目不仅有命令行 MVP，而且已经有可以实际使用的第一版 Windows 桌面 GUI。
+- 当前这版 GUI 已经覆盖了真实使用中的核心能力：
+  - 从 GUI 启动 / 停止 LiveSoul
+  - 手动选区
+  - 显示当前监控区域
+  - 运行中拖动监控区域位置
+  - 编辑提示词和常用运行参数
+- 这仍然属于“可用的内测版 GUI”，还不是最终可分发的产品级桌面应用。
+
+### 2026-03-12 后续具体 TODO
+
+1. GUI 细节继续打磨
+   - 继续优化窗口最小高度、信息密度、布局压缩、说明文案。
+   - 继续打磨按钮反馈、状态提示和普通用户可理解性。
+
+2. 监控框能力继续增强
+   - 当前只支持拖动位置，后续补可视化缩放，允许直接调整宽高。
+   - 考虑增加更明显或更低干扰的描边样式切换。
+
+3. 配置一致性保护
+   - 继续补启动前校验，避免 provider / endpoint / model 再次出现错配。
+   - 把更多“容易填错但不该让用户承担”的配置逻辑收进 GUI。
+
+4. 分发与安装
+   - GUI 已经证明路线成立，下一阶段应逐步把它推进成真正的 Windows 安装包，而不是继续依赖命令行启动。
 
 ## 如何继续启动项目
 
