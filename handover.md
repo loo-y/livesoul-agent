@@ -114,6 +114,69 @@
    - 加自动化测试
    - 增加更清晰的日志和运行状态面板
 
+## TODO
+
+### 2026-03-11 这次实际踩到的问题
+
+- 当前项目的 `.venv` 绑定到 `pyenv-win` 管理的 Python `3.12.10`。
+- 这套 Python 在本机上 `import tkinter` 虽然成功，但执行 `tk.Tk()` 会因为 `Tcl/Tk` 初始化失败而直接报错，所以原本“启动后用 Tk 全屏框选弹幕区域”的路径不稳定。
+- 尝试过用 OpenCV 作为 Windows 选区后备，但当前环境里的 OpenCV 是无 GUI 的构建，`cv2.namedWindow` / `cv2.selectROI` 也无法使用。
+- Windows 下原本的音频播放使用 `os.startfile()` 唤起系统播放器，这个行为是非阻塞的，因此不满足“前一段音频必须播完，下一轮截图/识别/TTS 才能继续”的业务要求。
+
+### 这次已经落地的 MVP 修复
+
+- [src/region_selector.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/region_selector.py)
+  - 保留原有 `tkinter` 选区实现。
+  - 新增 OpenCV 选区回退。
+  - 新增 Windows 下的 PowerShell + WinForms 全屏选区回退。
+  - 这样即使 Tk 运行时损坏，项目依然可以在 Windows 上完成手动框选区域这一基础能力。
+- [src/tts_module.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/tts_module.py)
+  - Windows 下播放逻辑改为优先使用 `ffplay` 阻塞播放。
+  - 只有找不到 `ffplay` 时才退回 `os.startfile()`。
+  - 已用本地现成 mp3 做过顺序播放验证，确认现在是“前一个播完再返回”，满足串行流水线要求。
+
+### 当前 MVP 的结论
+
+- 现在项目已经可以在本机 Windows 上满足最小可行性：
+  - 手动框选屏幕中的弹幕区域
+  - 进入真实截图 / 识别 / 回复 / TTS 主循环
+  - 等待前一条音频播放完成后再进入下一轮
+- 这只是开发态可用，不等于最终适合分发。
+
+### 最终产品目标
+
+- 这个项目最终目标不是交付“让懂技术的人在终端里激活 `.venv` 再执行 `python -m src.main`”。
+- 最终目标应是交付一个普通用户可安装、可启动、可使用的 Windows 分发包。
+- 用户下载安装后，应做到尽量开箱即用，不要求理解：
+  - `pyenv-win`
+  - `.venv`
+  - `pip install`
+  - `ffmpeg` / `ffplay`
+  - 环境变量配置
+
+### 后续需要继续完成的分发方案
+
+1. 自动准备 `ffplay`
+   - 启动时先检测项目内是否已有 `ffplay.exe`，例如 `tools/ffmpeg/bin/ffplay.exe`
+   - 若项目内没有，再检查系统 PATH
+   - 若系统也没有，则自动下载固定版本的 FFmpeg 分发包并缓存到项目目录
+   - 下载后统一优先走项目内缓存的 `ffplay.exe`
+   - 需要补上版本固定、校验、失败提示、重复启动不重复下载
+
+2. 降低对宿主 Python GUI 环境的依赖
+   - 当前 PowerShell + WinForms 选区方案可以作为 Windows MVP
+   - 但后续仍应评估是否需要更稳定、可打包的桌面 GUI 选区方案
+   - 目标是：分发包运行时不再依赖用户本机 Python 的 Tk/Tcl 是否完好
+
+3. 做真正的安装包 / 桌面应用
+   - 后续需要把项目打包成 Windows 可执行程序或安装包
+   - 最终体验目标应是：
+     - 用户下载安装
+     - 双击启动
+     - 首次运行自动准备依赖
+     - 后续直接使用
+   - 不应把当前这种开发态命令行启动方式暴露给最终用户
+
 ## 如何继续启动项目
 
 ### macOS

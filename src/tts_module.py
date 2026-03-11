@@ -200,11 +200,21 @@ class TTSModule:
             if system == "darwin":
                 self._play_file_macos(path)
             elif system == "windows":
-                os.startfile(str(path))  # type: ignore[attr-defined]
+                self._play_file_windows(path)
             else:
                 self._play_file_other(path)
         except Exception as exc:
             logger.warning("Audio playback failed for %s: %s", path, exc)
+
+    def _play_file_windows(self, path: Path) -> None:
+        ffplay = shutil.which("ffplay")
+        if ffplay:
+            subprocess.run(
+                [ffplay, "-nodisp", "-autoexit", "-loglevel", "error", str(path)],
+                check=False,
+            )
+            return
+        os.startfile(str(path))  # type: ignore[attr-defined]
 
     def _play_file_macos(self, path: Path) -> None:
         suffix = path.suffix.lower()
