@@ -5,6 +5,7 @@ import binascii
 import logging
 import os
 import platform
+import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,22 @@ import requests
 from .config import AppConfig
 
 logger = logging.getLogger(__name__)
+
+SILICONFLOW_VOICES = {
+    "songyi": "speech:songyivoice004:clwx0imsh004t12vfvu9wsc84:wxokarljymursdgzhlub",
+    "wangyibo": "speech:wangyibovoice002:clwx0imsh004t12vfvu9wsc84:pnzsgescndemxskgaxfi",
+    "susu": "speech:anna_su_001:clwx0imsh004t12vfvu9wsc84:ammdxsckzuwrukcieoov",
+    "susu02": "speech:anna_su_002:clwx0imsh004t12vfvu9wsc84:qkghtznzcxwvxmttyyyw",
+    "susu03": "speech:anna_su_003:clwx0imsh004t12vfvu9wsc84:jmqrsillxbrldjrbbqug",
+    "alex": "FunAudioLLM/CosyVoice2-0.5B:alex",
+    "anna": "FunAudioLLM/CosyVoice2-0.5B:anna",
+    "charles": "FunAudioLLM/CosyVoice2-0.5B:charles",
+    "bella": "FunAudioLLM/CosyVoice2-0.5B:bella",
+    "benjamin": "FunAudioLLM/CosyVoice2-0.5B:benjamin",
+    "claire": "FunAudioLLM/CosyVoice2-0.5B:claire",
+    "david": "FunAudioLLM/CosyVoice2-0.5B:david",
+    "diana": "FunAudioLLM/CosyVoice2-0.5B:diana",
+}
 
 try:
     from openai import OpenAI
@@ -43,6 +60,11 @@ class TTSModule:
                 logger.warning("MiniMax TTS is selected but API key is missing.")
                 return None
             return await asyncio.to_thread(self._speak_with_minimaxi, text)
+        if self.config.tts_provider == "siliconflow":
+            if not self.config.tts_api_key:
+                logger.warning("SiliconFlow TTS is selected but API key is missing.")
+                return None
+            return await asyncio.to_thread(self._speak_with_siliconflow, text)
         if self.config.tts_provider == "openai":
             if self.client is None:
                 logger.warning("OpenAI TTS is selected but API key is missing.")
@@ -102,6 +124,47 @@ class TTSModule:
         self._play_file(output)
         return output
 
+    def _speak_with_siliconflow(self, text: str) -> Path:
+        response_format = self.config.tts_response_format.lower()
+        output = self._output_path(response_format)
+        endpoint = self.config.tts_api_endpoint or "https://api.siliconflow.cn/v1/audio/speech"
+        voice = SILICONFLOW_VOICES.get(self.config.tts_voice, self.config.tts_voice)
+        speed = self.config.tts_speed if 0.25 <= self.config.tts_speed <= 4 else 1.0
+        sample_rate = self._resolve_siliconflow_sample_rate(response_format)
+        payload = {
+            "model": self.config.tts_model_name,
+            "input": text,
+            "voice": voice,
+            "response_format": response_format,
+            "sample_rate": sample_rate,
+            "stream": self.config.tts_stream,
+            "speed": speed,
+            "gain": self.config.tts_gain,
+        }
+        response = requests.post(
+            endpoint,
+            headers={
+                "Authorization": f"Bearer {self.config.tts_api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=120,
+        )
+        response.raise_for_status()
+        output.write_bytes(response.content)
+        self._play_file(output)
+        return output
+
+    def _resolve_siliconflow_sample_rate(self, response_format: str) -> int:
+        sample_rate = self.config.tts_sample_rate
+        if response_format == "mp3" and sample_rate not in {32000, 44100}:
+            logger.warning(
+                "SiliconFlow mp3 requires sample_rate 32000 or 44100; overriding %s to 44100.",
+                sample_rate,
+            )
+            return 44100
+        return sample_rate
+
     async def _speak_with_edge(self, text: str) -> Path | None:
         try:
             import edge_tts
@@ -135,10 +198,36 @@ class TTSModule:
         system = platform.system().lower()
         try:
             if system == "darwin":
-                subprocess.run(["afplay", str(path)], check=False)
+                self._play_file_macos(path)
             elif system == "windows":
                 os.startfile(str(path))  # type: ignore[attr-defined]
             else:
-                subprocess.run(["xdg-open", str(path)], check=False)
+                self._play_file_other(path)
         except Exception as exc:
             logger.warning("Audio playback failed for %s: %s", path, exc)
+
+    def _play_file_macos(self, path: Path) -> None:
+        suffix = path.suffix.lower()
+        if suffix in {".opus", ".ogg"}:
+            ffplay = shutil.which("ffplay")
+            if ffplay:
+                subprocess.run(
+                    [ffplay, "-nodisp", "-autoexit", "-loglevel", "error", str(path)],
+                    check=False,
+                )
+                return
+            logger.warning("ffplay is unavailable; cannot play %s on macOS.", suffix)
+            return
+        subprocess.run(["afplay", str(path)], check=False)
+
+    def _play_file_other(self, path: Path) -> None:
+        suffix = path.suffix.lower()
+        if suffix in {".opus", ".ogg"}:
+            ffplay = shutil.which("ffplay")
+            if ffplay:
+                subprocess.run(
+                    [ffplay, "-nodisp", "-autoexit", "-loglevel", "error", str(path)],
+                    check=False,
+                )
+                return
+        subprocess.run(["xdg-open", str(path)], check=False)

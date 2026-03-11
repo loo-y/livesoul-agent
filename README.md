@@ -10,7 +10,7 @@
 - 优先使用视觉模型识别弹幕，超时或失败时回退到 OCR
 - 动态加载 `agent_config/SOUL.md`、`IDENTITY.md`、`USER.md`
 - 生成适合直播口播的短回复
-- 支持 `console`、`minimaxi`、`openai`、`edge`、`pyttsx3` 五种 TTS 方式
+- 支持 `console`、`minimaxi`、`siliconflow`、`openai`、`edge`、`pyttsx3` 六种 TTS 方式
 - 持久化最近弹幕和最近几轮 `(弹幕 -> 回复)` 上下文
 - 使用串行流水线执行整条处理链路，避免前一轮 TTS 未结束就开始下一轮
 
@@ -95,7 +95,7 @@ copy .env.example .env
 
 - `SCREENSHOT_INTERVAL`：截图频率
 - `VISION_TIMEOUT_SECONDS`：视觉识别超时时间，超时后回退到 OCR
-- `TTS_PROVIDER`：当前 `.env.example` 默认 `minimaxi`
+- `TTS_PROVIDER`：当前 `.env.example` 默认 `minimaxi`，也支持 `siliconflow`
 - `MEMORY_DIR`：运行记忆文件目录
 
 如需启用真实模型：
@@ -103,6 +103,7 @@ copy .env.example .env
 - 视觉识别：填写 `VISION_API_KEY`、`VISION_MODEL_NAME`、`VISION_API_BASE`
 - 文本生成：填写 `LLM_API_KEY`、`LLM_MODEL_NAME`、`LLM_API_BASE`
 - TTS：填写 `TTS_API_KEY`、`TTS_MODEL_NAME`、`TTS_API_ENDPOINT`、`TTS_VOICE`
+- 如需调整 TTS 音频参数，可再设置 `TTS_RESPONSE_FORMAT`、`TTS_SAMPLE_RATE`、`TTS_STREAM`、`TTS_SPEED`、`TTS_GAIN`
 
 如果暂时没有真实截图环境，可以设置：
 

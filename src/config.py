@@ -47,6 +47,11 @@ class AppConfig:
     tts_model_name: str
     tts_api_endpoint: str | None
     tts_voice: str
+    tts_response_format: str
+    tts_sample_rate: int
+    tts_stream: bool
+    tts_speed: float
+    tts_gain: float
     tts_output_dir: Path
     memory_dir: Path
     agent_config_dir: Path
@@ -86,6 +91,8 @@ def load_config(env_path: str | Path | None = None) -> AppConfig:
             tts_api_endpoint = legacy_tts_api_base or "https://api.openai.com/v1"
         elif tts_provider == "minimaxi":
             tts_api_endpoint = legacy_tts_api_base or "https://api.minimaxi.com/v1/t2a_v2"
+        elif tts_provider == "siliconflow":
+            tts_api_endpoint = legacy_tts_api_base or "https://api.siliconflow.cn/v1/audio/speech"
         else:
             tts_api_endpoint = legacy_tts_api_base
 
@@ -112,6 +119,11 @@ def load_config(env_path: str | Path | None = None) -> AppConfig:
         tts_model_name=os.getenv("TTS_MODEL_NAME", "gpt-4o-mini-tts"),
         tts_api_endpoint=tts_api_endpoint,
         tts_voice=os.getenv("TTS_VOICE", "alloy"),
+        tts_response_format=os.getenv("TTS_RESPONSE_FORMAT", "mp3"),
+        tts_sample_rate=_env_int("TTS_SAMPLE_RATE", 32000),
+        tts_stream=os.getenv("TTS_STREAM", "false").lower() in {"1", "true", "yes"},
+        tts_speed=_env_float("TTS_SPEED", 1.0),
+        tts_gain=_env_float("TTS_GAIN", 0.0),
         tts_output_dir=base_dir / os.getenv("TTS_OUTPUT_DIR", "runtime/audio"),
         memory_dir=base_dir / os.getenv("MEMORY_DIR", "runtime/memory"),
         agent_config_dir=base_dir / os.getenv("AGENT_CONFIG_DIR", "agent_config"),

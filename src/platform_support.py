@@ -88,3 +88,7 @@ class PlatformSupportChecker:
             logger.warning("TTS provider `pyttsx3` selected but `pyttsx3` is not installed.")
         if provider == "openai" and not self.config.tts_api_key:
             logger.warning("TTS provider `openai` selected but TTS_API_KEY is missing.")
+        if provider == "minimaxi" and not self.config.tts_api_key:
+            logger.warning("TTS provider `minimaxi` selected but TTS_API_KEY is missing.")
+        if provider == "siliconflow" and not self.config.tts_api_key:
+            logger.warning("TTS provider `siliconflow` selected but TTS_API_KEY is missing.")
