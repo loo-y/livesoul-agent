@@ -32,6 +32,7 @@
   - `runtime/memory/session_memory.html`
 - 增加了 Windows 全局快捷键 `Ctrl+Alt+Q`，可快速停止程序
 - 接入并验证了 MiniMax TTS
+- 新增并验证了 SiliconFlow TTS
 - 配置项已从 `TTS_API_BASE` 迁移为 `TTS_API_ENDPOINT`，并保留旧字段兼容
 - `.env.example` 已同步更新
 
@@ -59,6 +60,15 @@
 - `TTS_API_ENDPOINT=https://api.minimaxi.com/v1/t2a_v2`
 - `MEMORY_DIR=runtime/memory`
 
+如果切到 SiliconFlow，当前推荐：
+
+- `TTS_PROVIDER=siliconflow`
+- `TTS_API_ENDPOINT=https://api.siliconflow.cn/v1/audio/speech`
+- `TTS_MODEL_NAME=FunAudioLLM/CosyVoice2-0.5B`
+- `TTS_VOICE=susu`
+- `TTS_RESPONSE_FORMAT=mp3`
+- `TTS_SAMPLE_RATE=44100`
+
 仍保留对旧字段 `TTS_API_BASE` 的兼容，但不再推荐继续使用。
 
 ## 已做过的验证
@@ -68,6 +78,9 @@
 - 视觉模型真实调用通过
 - iflow LLM 真实调用通过
 - MiniMax TTS 真实调用通过，已成功生成 MP3 文件
+- SiliconFlow TTS 真实调用通过：
+  - `opus` 返回和文件落地通过
+  - `mp3 + 44100Hz` 端到端通过
 - 真实直播截图验证过：视觉模型识别质量明显优于 OCR
 - 运行记忆文件会自动生成：
   - `runtime/memory/session_memory.json`
@@ -79,6 +92,7 @@
 - OCR 可作为回退，但在真实弹幕场景下质量仍明显不如视觉模型
 - `pytesseract` 依赖系统 `tesseract`，当前这台机器未装
 - TTS 播放目前仍是系统播放，还没接 OBS 音频路由
+- SiliconFlow 如果使用 `mp3`，采样率必须是 `32000` 或 `44100`
 - 没有自动化测试
 - 还没有打包成桌面应用
 

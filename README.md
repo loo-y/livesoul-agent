@@ -105,6 +105,12 @@ copy .env.example .env
 - TTS：填写 `TTS_API_KEY`、`TTS_MODEL_NAME`、`TTS_API_ENDPOINT`、`TTS_VOICE`
 - 如需调整 TTS 音频参数，可再设置 `TTS_RESPONSE_FORMAT`、`TTS_SAMPLE_RATE`、`TTS_STREAM`、`TTS_SPEED`、`TTS_GAIN`
 
+TTS 供应商补充说明：
+
+- `minimaxi` 当前按 MP3 路径工作
+- `siliconflow` 已验证可用，推荐配置为 `TTS_RESPONSE_FORMAT=mp3` 且 `TTS_SAMPLE_RATE=44100`
+- 如果 `siliconflow` 使用 `opus` / `ogg`，macOS 会自动改走 `ffplay` 播放；如果使用 `mp3`，则继续走系统 MP3 播放链路
+
 如果暂时没有真实截图环境，可以设置：
 
 ```env
@@ -119,7 +125,7 @@ SCREENSHOT_IMAGE_PATH=/absolute/path/to/sample.png
 
 - 如果启动后日志里出现截图失败，先检查 Screen Recording 权限。
 - 如果区域框选无法弹出，通常是 `tkinter` 不可用，换用带 Tk 的 Python 发行版。
-- `afplay` 已用于 macOS 音频播放，不需要额外改代码。
+- MP3 默认使用 `afplay`；`opus` / `ogg` 会优先使用 `ffplay`。
 
 ## Windows 注意事项
 
