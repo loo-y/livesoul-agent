@@ -5,11 +5,15 @@ import os
 import re
 import sys
 from dataclasses import dataclass
+from datetime import datetime
+from html import escape
 from pathlib import Path
+
+from .config import ensure_runtime_config, list_profiles, load_settings as load_json_settings, save_settings as save_json_settings
 
 try:
     from PySide6.QtCore import QPoint, QProcess, QTimer, Qt
-    from PySide6.QtGui import QAction, QColor, QFont, QPainter, QPen, QPixmap, QTextCursor
+    from PySide6.QtGui import QAction, QColor, QFont, QPainter, QPen, QPixmap, QTextCursor, QTextOption
     from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
@@ -41,19 +45,24 @@ except ImportError as exc:  # pragma: no cover - optional GUI dependency
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ENV_PATH = ROOT / ".env"
-ENV_EXAMPLE_PATH = ROOT / ".env.example"
-PROMPT_FILES = {
-    "SOUL": ROOT / "agent_config" / "SOUL.md",
-    "IDENTITY": ROOT / "agent_config" / "IDENTITY.md",
-    "USER": ROOT / "agent_config" / "USER.md",
-}
+RUNTIME_CONFIG_JSON = ROOT / "runtime" / "config.json"
+PROFILES_DIR = ROOT / "profiles"
+PROMPT_FILE_SPECS = (
+    ("SOUL.md", "角色灵魂"),
+    ("IDENTITY.md", "基础身份"),
+    ("USER.md", "用户约束"),
+    ("LLM_SYSTEM.md", "文本模型提示词"),
+    ("VISION_PROMPT.md", "视觉模型提示词"),
+)
 RUNTIME_STDOUT = ROOT / "runtime" / "app.stdout.log"
 RUNTIME_STDERR = ROOT / "runtime" / "app.stderr.log"
 RUNTIME_FRAMES = ROOT / "runtime" / "frames"
 RUNTIME_MEMORY_JSON = ROOT / "runtime" / "memory" / "session_memory.json"
 RUNTIME_REGION_JSON = ROOT / "runtime" / "current_region.json"
 REGION_LOG_PATTERN = re.compile(r"Selected barrage region for current session: \((\d+), (\d+), (\d+), (\d+)\)")
+LOG_LEVEL_PATTERN = re.compile(
+    r"^(?P<timestamp>\d{4}-\d{2}-\d{2} [\d:,]+)\s+\|\s+(?P<level>[A-Z]+)\s+\|\s+(?P<logger>[^|]+)\s+\|\s+(?P<message>.*)$"
+)
 
 
 @dataclass(slots=True)
@@ -91,49 +100,19 @@ SETTINGS_FIELDS = (
 SUPPORTED_TTS_PROVIDERS = ("siliconflow", "minimaxi")
 
 
-class DotEnvEditor:
-    line_pattern = re.compile(r"^(?P<key>[A-Z0-9_]+)=(?P<value>.*)$")
+class JsonConfigStore:
+    def __init__(self, base_dir: Path) -> None:
+        self.base_dir = base_dir
+        ensure_runtime_config(base_dir)
 
-    def __init__(self, path: Path, fallback_path: Path) -> None:
-        self.path = path
-        self.fallback_path = fallback_path
+    def load(self) -> dict[str, object]:
+        return load_json_settings(self.base_dir)
 
-    def ensure_exists(self) -> None:
-        if not self.path.exists() and self.fallback_path.exists():
-            self.path.write_text(self.fallback_path.read_text(encoding="utf-8"), encoding="utf-8")
+    def save(self, payload: dict[str, object]) -> None:
+        save_json_settings(payload, self.base_dir)
 
-    def load(self) -> dict[str, str]:
-        self.ensure_exists()
-        if not self.path.exists():
-            return {}
-        values: dict[str, str] = {}
-        for line in self.path.read_text(encoding="utf-8").splitlines():
-            match = self.line_pattern.match(line.strip())
-            if match:
-                values[match.group("key")] = match.group("value")
-        return values
-
-    def save_values(self, updates: dict[str, str]) -> None:
-        self.ensure_exists()
-        existing_lines = self.path.read_text(encoding="utf-8").splitlines() if self.path.exists() else []
-        touched: set[str] = set()
-        new_lines: list[str] = []
-        for line in existing_lines:
-            stripped = line.strip()
-            match = self.line_pattern.match(stripped)
-            if not match:
-                new_lines.append(line)
-                continue
-            key = match.group("key")
-            if key in updates:
-                new_lines.append(f"{key}={updates[key]}")
-                touched.add(key)
-            else:
-                new_lines.append(line)
-        for key, value in updates.items():
-            if key not in touched:
-                new_lines.append(f"{key}={value}")
-        self.path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    def list_profiles(self) -> list[dict[str, str]]:
+        return list_profiles(self.base_dir)
 
 
 class PreviewLabel(QLabel):
@@ -253,7 +232,7 @@ class LiveSoulMainWindow(QMainWindow):
         self.python_executable = sys.executable
         self.current_region: tuple[int, int, int, int] | None = None
 
-        self.env_editor = DotEnvEditor(ENV_PATH, ENV_EXAMPLE_PATH)
+        self.config_store = JsonConfigStore(ROOT)
         self.process = QProcess(self)
         self.process.setProgram(self.python_executable)
         self.process.setWorkingDirectory(str(ROOT))
@@ -270,6 +249,7 @@ class LiveSoulMainWindow(QMainWindow):
         self.status_badge = QLabel("待机")
         self.status_badge.setObjectName("statusBadge")
         self.status_summary = QLabel("准备就绪。你可以先检查配置，或直接点击“启动 LiveSoul”。")
+        self.status_summary.setObjectName("statusSummary")
         self.status_summary.setWordWrap(True)
         self.overlay = RegionOverlay()
         self.overlay.region_changed_callback = self.handle_overlay_region_changed
@@ -277,13 +257,17 @@ class LiveSoulMainWindow(QMainWindow):
         self.info_labels: dict[str, QLabel] = {}
         self.prompt_editors: dict[str, QTextEdit] = {}
         self.setting_widgets: dict[str, QWidget] = {}
+        self.current_settings_payload: dict[str, object] = {}
+        self.active_profile_id = "default"
+        self.log_entries: list[str] = []
         self.last_frame_preview = PreviewLabel("最近一次裁剪画面")
         self.memory_preview = QPlainTextEdit()
         self.memory_preview.setReadOnly(True)
         self.memory_preview.setPlaceholderText("这里会显示最近识别到的弹幕和回复内容。")
-        self.log_output = QPlainTextEdit()
+        self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
         self.log_output.setPlaceholderText("启动后，这里会实时滚动运行日志。")
+        self.log_output.setWordWrapMode(QTextOption.WrapMode.WrapAnywhere)
 
         self.init_ui()
         self._apply_interaction_cues()
@@ -323,17 +307,17 @@ class LiveSoulMainWindow(QMainWindow):
                 top: -1px;
             }
             QTabBar::tab {
-                background: #e7ddcf;
+                background: #ece2d4;
                 color: #5b4d3a;
-                padding: 12px 18px;
+                padding: 11px 18px;
                 margin-right: 8px;
                 border-top-left-radius: 12px;
                 border-top-right-radius: 12px;
                 font-weight: 600;
             }
             QTabBar::tab:selected {
-                background: #fcfaf6;
-                color: #17191c;
+                background: #fffdf9;
+                color: #132029;
             }
             QGroupBox {
                 border: 1px solid #ded5c8;
@@ -352,15 +336,15 @@ class LiveSoulMainWindow(QMainWindow):
                 background: #1f5f5b;
                 color: white;
                 border: none;
-                border-radius: 12px;
+                border-radius: 14px;
                 padding: 12px 18px;
                 font-weight: 600;
             }
             QPushButton:hover {
-                background: #184c49;
+                background: #174f4b;
             }
             QPushButton:pressed {
-                background: #123b39;
+                background: #103c39;
                 padding-top: 13px;
                 padding-bottom: 11px;
             }
@@ -398,16 +382,24 @@ class LiveSoulMainWindow(QMainWindow):
                 color: #1d2430;
             }
             QLabel#heroSubtitle {
-                color: #6b6258;
+                color: #665d52;
                 font-size: 14px;
             }
             QLabel#statusBadge {
-                background: #efe6d7;
+                background: #f3e9d8;
                 border: 1px solid #dcc8a6;
-                border-radius: 16px;
-                padding: 6px 12px;
+                border-radius: 18px;
+                padding: 7px 14px;
                 font-weight: 700;
                 color: #6a4e23;
+            }
+            QLabel#statusSummary {
+                background: #fff7ec;
+                border: 1px solid #ead9bf;
+                border-radius: 16px;
+                padding: 12px 14px;
+                color: #5d5348;
+                min-height: 52px;
             }
             QFrame[card="true"] {
                 background: #fffdf9;
@@ -435,7 +427,8 @@ class LiveSoulMainWindow(QMainWindow):
         container = QFrame()
         container.setProperty("card", True)
         layout = QHBoxLayout(container)
-        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(18)
 
         left = QVBoxLayout()
         title = QLabel("LiveSoul 控制台")
@@ -449,6 +442,7 @@ class LiveSoulMainWindow(QMainWindow):
         left.addWidget(subtitle)
 
         right = QVBoxLayout()
+        right.setSpacing(10)
         pin_button = QPushButton("窗口置顶")
         pin_button.setProperty("variant", "ghost")
         pin_button.setCheckable(True)
@@ -471,10 +465,16 @@ class LiveSoulMainWindow(QMainWindow):
         button_row.addWidget(overlay_button)
         button_row.addWidget(adjust_overlay_button)
         right.addLayout(button_row)
-        right.addWidget(self.status_badge, alignment=Qt.AlignmentFlag.AlignRight)
+        status_row = QHBoxLayout()
+        status_row.addStretch(1)
+        status_row.addWidget(self.status_badge, alignment=Qt.AlignmentFlag.AlignRight)
+        right.addLayout(status_row)
+        self.status_summary.setMinimumWidth(340)
+        self.status_summary.setMaximumWidth(420)
         right.addWidget(self.status_summary, alignment=Qt.AlignmentFlag.AlignRight)
+        right.addStretch(1)
 
-        layout.addLayout(left, stretch=2)
+        layout.addLayout(left, stretch=3)
         layout.addLayout(right, stretch=1)
         return container
 
@@ -539,20 +539,32 @@ class LiveSoulMainWindow(QMainWindow):
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setSpacing(10)
+        profile_bar = QHBoxLayout()
+        profile_label = QLabel("当前人设")
+        self.profile_combo = QComboBox()
+        self.profile_combo.currentIndexChanged.connect(self.handle_profile_changed)
+        profile_hint = QLabel("同一套人设下可同时维护角色提示词、文本模型提示词和视觉识别提示词。")
+        profile_hint.setStyleSheet("color:#7b6d5d;")
+        profile_bar.addWidget(profile_label)
+        profile_bar.addWidget(self.profile_combo)
+        profile_bar.addWidget(profile_hint)
+        profile_bar.addStretch(1)
+        layout.addLayout(profile_bar)
         editor_grid = QGridLayout()
         editor_grid.setHorizontalSpacing(12)
         editor_grid.setVerticalSpacing(12)
 
-        for index, (name, path) in enumerate(PROMPT_FILES.items()):
+        for index, (filename, title) in enumerate(PROMPT_FILE_SPECS):
             editor = QTextEdit()
-            editor.setPlaceholderText(f"在这里编辑 {name}.md")
+            editor.setPlaceholderText(f"在这里编辑 {title}")
             editor.setMinimumHeight(120)
-            self.prompt_editors[name] = editor
+            self.prompt_editors[filename] = editor
 
-            group = QGroupBox(f"{name}.md")
+            group = QGroupBox(title)
             group_layout = QVBoxLayout(group)
-            path_label = QLabel(str(path.relative_to(ROOT)))
+            path_label = QLabel(filename)
             path_label.setStyleSheet("color:#7b6d5d;font-size:12px;")
+            path_label.setObjectName(f"pathLabel:{filename}")
             group_layout.addWidget(path_label)
             group_layout.addWidget(editor)
             editor_grid.addWidget(group, index // 2, index % 2)
@@ -650,7 +662,7 @@ class LiveSoulMainWindow(QMainWindow):
         self.runtime_notes = QPlainTextEdit()
         self.runtime_notes.setReadOnly(True)
         self.runtime_notes.setPlaceholderText("这里会显示当前区域、最近弹幕、最近回复等关键运行信息。")
-        runtime_layout.addWidget(self._wrap_group("运行提示", self.runtime_notes))
+        runtime_layout.addWidget(self._wrap_group("运行摘要", self.runtime_notes))
         previews.addWidget(runtime_panel, stretch=2)
         layout.addLayout(previews, stretch=1)
         return tab
@@ -707,13 +719,32 @@ class LiveSoulMainWindow(QMainWindow):
         layout.addWidget(widget)
         return group
 
+    def _current_profile_dir(self) -> Path:
+        return PROFILES_DIR / self.active_profile_id
+
+    def _prompt_path(self, filename: str) -> Path:
+        return self._current_profile_dir() / filename
+
+    def _populate_profile_combo(self) -> None:
+        profiles = self.config_store.list_profiles()
+        self.profile_combo.blockSignals(True)
+        self.profile_combo.clear()
+        for profile in profiles:
+            label = profile["name"]
+            description = profile.get("description") or ""
+            if description:
+                label = f"{label}  {description}"
+            self.profile_combo.addItem(label, profile["id"])
+        index = self.profile_combo.findData(self.active_profile_id)
+        if index >= 0:
+            self.profile_combo.setCurrentIndex(index)
+        self.profile_combo.blockSignals(False)
+
     def append_process_output(self) -> None:
         payload = bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="replace")
         if not payload:
             return
-        self.log_output.moveCursor(QTextCursor.MoveOperation.End)
-        self.log_output.insertPlainText(payload)
-        self.log_output.moveCursor(QTextCursor.MoveOperation.End)
+        self._append_log_payload(payload)
         self.update_runtime_summary_from_log(payload)
 
     def _apply_interaction_cues(self) -> None:
@@ -726,26 +757,86 @@ class LiveSoulMainWindow(QMainWindow):
         if not lines:
             return
         latest = lines[-1]
-        self.status_summary.setText(f"最新日志：{latest}")
         if "Selected barrage region" in latest:
-            region_text = latest.split(": ", 1)[-1]
-            self.info_labels["region"].setText(region_text)
+            self.status_summary.setText("已完成监控区域选择，后续会持续按该区域裁剪。")
             self.info_labels["region_detail"].setText("已完成区域选择，后续会持续按该区域裁剪。")
             match = REGION_LOG_PATTERN.search(latest)
             if match:
                 self.current_region = tuple(int(value) for value in match.groups())  # type: ignore[assignment]
+                self.info_labels["region"].setText(
+                    ", ".join(str(value) for value in self.current_region)
+                )
                 self._sync_overlay_visibility()
         if "LiveSoul agent started" in latest:
+            self.status_summary.setText("主循环已启动，正在等待新画面。")
             self.info_labels["runtime_state"].setText("运行中")
             self.info_labels["runtime_state_detail"].setText("主循环已经启动，正在等待新画面。")
         if "Generated reply:" in latest:
+            self.status_summary.setText("已生成回复，正在播放语音或等待播放完成。")
             self.info_labels["runtime_state_detail"].setText("已生成回复，正在播放或等待播放完成。")
         if "Recognized barrage via" in latest:
+            self.status_summary.setText("已识别到新弹幕，识别链路工作正常。")
             self.info_labels["runtime_state_detail"].setText("已识别到新弹幕，识别链路工作正常。")
         if "Pipeline loop failed" in latest or "Traceback" in latest:
             self.status_badge.setText("异常")
+            self.status_summary.setText("运行中出现错误，请查看实时日志。")
             self.info_labels["runtime_state"].setText("异常")
             self.info_labels["runtime_state_detail"].setText("运行中出现错误，请查看左侧日志。")
+
+    def _append_log_payload(self, payload: str) -> None:
+        lines = [line for line in payload.splitlines() if line.strip()]
+        if not lines:
+            return
+        self.log_entries.extend(lines)
+        self.log_entries = self.log_entries[-120:]
+        self.log_output.setHtml("".join(self._render_log_line(line) for line in self.log_entries))
+        self.log_output.moveCursor(QTextCursor.MoveOperation.End)
+
+    def _render_log_line(self, line: str) -> str:
+        match = LOG_LEVEL_PATTERN.match(line.strip())
+        if not match:
+            return (
+                "<div style='margin:0 0 10px 0;padding:10px 12px;border-radius:12px;"
+                "background:#f4efe7;border:1px solid #dfd4c4;color:#544b40;'>"
+                f"<div style='white-space:pre-wrap'>{escape(line)}</div>"
+                "</div>"
+            )
+
+        level = match.group("level").upper()
+        timestamp = self._display_timestamp(match.group("timestamp"))
+        palette = {
+            "DEBUG": ("#eef2f8", "#55749b", "#27496b"),
+            "INFO": ("#edf6f3", "#5c8f82", "#1f5f5b"),
+            "WARNING": ("#fff7e7", "#d49a2c", "#7b5200"),
+            "ERROR": ("#fff0ee", "#db6d5f", "#8d2f25"),
+            "CRITICAL": ("#fdecea", "#b73a31", "#7c1d16"),
+        }
+        background, badge, text_color = palette.get(level, ("#f4efe7", "#8d8274", "#544b40"))
+        return (
+            f"<div style='margin:0 0 10px 0;padding:12px 14px;border-radius:14px;background:{background};"
+            "border:1px solid #ded5c8;'>"
+            "<div style='display:flex;justify-content:space-between;gap:12px;margin-bottom:8px;'>"
+            f"<span style='background:{badge};color:#fff;padding:3px 8px;border-radius:999px;font-size:12px;font-weight:700;'>{escape(level)}</span>"
+            f"<span style='color:#756858;font-size:12px'>{escape(timestamp)}</span>"
+            "</div>"
+            f"<div style='color:#7d6d5b;font-size:12px;margin-bottom:6px'>{escape(match.group('logger').strip())}</div>"
+            f"<div style='white-space:pre-wrap;color:{text_color};line-height:1.55'>{escape(match.group('message').strip())}</div>"
+            "</div>"
+        )
+
+    def _display_timestamp(self, value: str) -> str:
+        if not value:
+            return "未知"
+        normalized = value.strip().replace("T", " ")
+        try:
+            parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+            if parsed.tzinfo is not None:
+                return parsed.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            pass
+        normalized = re.sub(r"([.,]\d+)(?=(?:Z|[+-]\d{2}:\d{2})?$)", "", normalized)
+        normalized = re.sub(r"(?:Z|[+-]\d{2}:\d{2})$", "", normalized)
+        return normalized.strip()
 
     def handle_process_state_change(self, state: QProcess.ProcessState) -> None:
         running = state == QProcess.ProcessState.Running
@@ -774,6 +865,7 @@ class LiveSoulMainWindow(QMainWindow):
         if self.process.state() != QProcess.ProcessState.NotRunning:
             return
         self.save_settings(silent=True)
+        self.log_entries = []
         self.log_output.clear()
         self.process.setArguments(["-u", "-m", "src.main"])
         self.process.start()
@@ -791,87 +883,216 @@ class LiveSoulMainWindow(QMainWindow):
         self.status_summary.setText("已从界面停止运行。")
 
     def load_prompt_files(self) -> None:
-        for name, path in PROMPT_FILES.items():
-            self.prompt_editors[name].setPlainText(path.read_text(encoding="utf-8") if path.exists() else "")
-        self.status_summary.setText("提示词文件已载入，你可以直接在界面中修改。")
+        profile_dir = self._current_profile_dir()
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        for filename, _title in PROMPT_FILE_SPECS:
+            path = self._prompt_path(filename)
+            self.prompt_editors[filename].setPlainText(path.read_text(encoding="utf-8") if path.exists() else "")
+        self.status_summary.setText("人设提示词已载入，你可以直接在界面中修改。")
 
     def save_prompt_files(self) -> None:
-        for name, path in PROMPT_FILES.items():
-            path.write_text(self.prompt_editors[name].toPlainText(), encoding="utf-8")
-        self.status_summary.setText("提示词文件已保存。下次生成回复时会读取最新内容。")
-        QMessageBox.information(self, "保存成功", "提示词文件已保存。")
+        profile_dir = self._current_profile_dir()
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        for filename, _title in PROMPT_FILE_SPECS:
+            self._prompt_path(filename).write_text(self.prompt_editors[filename].toPlainText(), encoding="utf-8")
+        self.status_summary.setText("当前人设文件已保存。下次生成回复时会读取最新内容。")
+        QMessageBox.information(self, "保存成功", "当前人设文件已保存。")
+
+    def handle_profile_changed(self) -> None:
+        profile_id = self.profile_combo.currentData()
+        if not profile_id or profile_id == self.active_profile_id:
+            return
+        self.active_profile_id = str(profile_id)
+        self.current_settings_payload["active_profile_id"] = self.active_profile_id
+        self.load_prompt_files()
+        self.status_summary.setText("已切换人设。重新生成回复时会使用当前人设。")
 
     def load_settings(self) -> None:
-        values = self.env_editor.load()
-        provider_value = values.get("TTS_PROVIDER", "").strip().lower()
+        values = self.config_store.load()
+        self.current_settings_payload = values
+        self.active_profile_id = str(values.get("active_profile_id") or "default")
+        self._populate_profile_combo()
+
+        capture = values.get("capture", {})
+        vision = values.get("vision", {})
+        llm = values.get("llm", {})
+        tts = values.get("tts", {})
+        runtime = values.get("runtime", {})
+
+        provider_value = str(tts.get("provider") or "").strip().lower()
         if provider_value and provider_value not in SUPPORTED_TTS_PROVIDERS:
-            values["TTS_PROVIDER"] = "siliconflow"
+            tts["provider"] = "siliconflow"
             self.status_summary.setText(
-                f"检测到旧的语音提供商配置“{provider_value}”，界面已临时回退为 siliconflow。保存配置后会写回 .env。"
+                f"检测到旧的语音提供商配置“{provider_value}”，界面已临时回退为 siliconflow。保存配置后会写回 runtime/config.json。"
             )
         for spec in SETTINGS_FIELDS:
-            value = values.get(spec.key, "")
+            value = self._extract_field_value(spec.key, capture, vision, llm, tts, runtime)
             widget = self.setting_widgets[spec.key]
             if spec.kind == "combo":
                 combo = widget  # type: ignore[assignment]
-                index = combo.findText(value)
+                index = combo.findText(str(value))
                 if index >= 0:
                     combo.setCurrentIndex(index)
             elif spec.kind == "bool":
-                widget.setChecked(value.lower() in {"1", "true", "yes"})  # type: ignore[attr-defined]
+                widget.setChecked(bool(value))  # type: ignore[attr-defined]
             else:
-                widget.setText(value)  # type: ignore[attr-defined]
-        self.vision_api_key.setText(values.get("VISION_API_KEY", ""))
-        self.llm_api_key.setText(values.get("LLM_API_KEY", ""))
-        self.tts_api_key.setText(values.get("TTS_API_KEY", ""))
-        self.info_labels["tts"].setText(values.get("TTS_PROVIDER", "—"))
-        self.info_labels["tts_detail"].setText(values.get("TTS_MODEL_NAME", ""))
+                widget.setText("" if value in (None, "") else str(value))  # type: ignore[attr-defined]
+        self.vision_api_key.setText(str(vision.get("api_key") or ""))
+        self.llm_api_key.setText(str(llm.get("api_key") or ""))
+        self.tts_api_key.setText(str(tts.get("api_key") or ""))
+        self.info_labels["tts"].setText(str(tts.get("provider") or "—"))
+        self.info_labels["tts_detail"].setText(str(tts.get("model") or ""))
         self._update_region_label(values)
         self._load_region_from_settings(values)
+        self.load_prompt_files()
 
     def save_settings(self, silent: bool = False) -> None:
-        updates: dict[str, str] = {}
+        payload = dict(self.current_settings_payload or self.config_store.load())
+        capture = dict(payload.get("capture", {}))
+        vision = dict(payload.get("vision", {}))
+        llm = dict(payload.get("llm", {}))
+        tts = dict(payload.get("tts", {}))
+        runtime = dict(payload.get("runtime", {}))
+
         for spec in SETTINGS_FIELDS:
             widget = self.setting_widgets[spec.key]
             if spec.kind == "combo":
-                updates[spec.key] = widget.currentText()  # type: ignore[attr-defined]
+                value: object = widget.currentText()  # type: ignore[attr-defined]
             elif spec.kind == "bool":
-                updates[spec.key] = "true" if widget.isChecked() else "false"  # type: ignore[attr-defined]
+                value = widget.isChecked()  # type: ignore[attr-defined]
             else:
-                updates[spec.key] = widget.text().strip()  # type: ignore[attr-defined]
-        updates["VISION_API_KEY"] = self.vision_api_key.text().strip()
-        updates["LLM_API_KEY"] = self.llm_api_key.text().strip()
-        updates["TTS_API_KEY"] = self.tts_api_key.text().strip()
-        self.env_editor.save_values(updates)
-        self.info_labels["tts"].setText(updates.get("TTS_PROVIDER", "—"))
-        self.info_labels["tts_detail"].setText(updates.get("TTS_MODEL_NAME", ""))
-        self._update_region_label(self.env_editor.load())
-        self.status_summary.setText("运行配置已保存到 .env。重新启动后会按新配置生效。")
+                value = widget.text().strip()  # type: ignore[attr-defined]
+            self._assign_field_value(spec.key, value, capture, vision, llm, tts, runtime)
+
+        vision["api_key"] = self.vision_api_key.text().strip()
+        llm["api_key"] = self.llm_api_key.text().strip()
+        tts["api_key"] = self.tts_api_key.text().strip()
+        payload["capture"] = capture
+        payload["vision"] = vision
+        payload["llm"] = llm
+        payload["tts"] = tts
+        payload["runtime"] = runtime
+        payload["active_profile_id"] = self.active_profile_id
+        self.current_settings_payload = payload
+        self.config_store.save(payload)
+        self.info_labels["tts"].setText(str(tts.get("provider") or "—"))
+        self.info_labels["tts_detail"].setText(str(tts.get("model") or ""))
+        self._update_region_label(payload)
+        self._write_runtime_region_file_if_present(payload)
+        self.status_summary.setText("运行配置已保存到 runtime/config.json。重新启动后会按新配置生效。")
         if not silent:
-            QMessageBox.information(self, "保存成功", "运行配置已保存到 .env。")
+            QMessageBox.information(self, "保存成功", "运行配置已保存到 runtime/config.json。")
 
     def _update_region_label(self, values: dict[str, str]) -> None:
-        if values.get("AUTO_SELECT_REGION", "").lower() in {"1", "true", "yes"}:
+        capture = values.get("capture", {})
+        region_payload = capture.get("barrage_region", {})
+        if bool(capture.get("auto_select_region", True)):
             region = "每次启动时手动选择"
         else:
-            coords = [values.get(name, "") for name in ("BARRAGE_REGION_X", "BARRAGE_REGION_Y", "BARRAGE_REGION_W", "BARRAGE_REGION_H")]
-            region = ", ".join(coords) if any(coords) else "未设置"
+            coords = [region_payload.get(name) for name in ("x", "y", "w", "h")]
+            region = ", ".join(str(value) for value in coords if value is not None) if any(value is not None for value in coords) else "未设置"
         self.info_labels["region"].setText(region)
-        self.info_labels["region_detail"].setText("程序启动时会按这里的设置决定是否重新框选。")
+        profile_name = self.profile_combo.currentText().split("  ", 1)[0] if hasattr(self, "profile_combo") else self.active_profile_id
+        self.info_labels["region_detail"].setText(f"当前人设：{profile_name}。程序启动时会按这里的设置决定是否重新框选。")
 
-    def _load_region_from_settings(self, values: dict[str, str]) -> None:
+    def _load_region_from_settings(self, values: dict[str, object]) -> None:
+        capture = values.get("capture", {})
+        region_payload = capture.get("barrage_region", {})
         try:
             coords = tuple(
-                int(values.get(name, "").strip())
-                for name in ("BARRAGE_REGION_X", "BARRAGE_REGION_Y", "BARRAGE_REGION_W", "BARRAGE_REGION_H")
+                int(region_payload.get(name))
+                for name in ("x", "y", "w", "h")
             )
-        except ValueError:
+        except (ValueError, TypeError):
             self.current_region = None
             return
         if all(value >= 0 for value in coords[:2]) and all(value > 0 for value in coords[2:]):
             self.current_region = coords  # type: ignore[assignment]
         else:
             self.current_region = None
+
+    def _extract_field_value(
+        self,
+        key: str,
+        capture: dict[str, object],
+        vision: dict[str, object],
+        llm: dict[str, object],
+        tts: dict[str, object],
+        runtime: dict[str, object],
+    ) -> object:
+        mapping = {
+            "AUTO_SELECT_REGION": capture.get("auto_select_region", True),
+            "SCREENSHOT_INTERVAL": capture.get("screenshot_interval", ""),
+            "VISION_TIMEOUT_SECONDS": capture.get("vision_timeout_seconds", ""),
+            "VISION_MODEL_NAME": vision.get("model", ""),
+            "VISION_API_BASE": vision.get("api_base", ""),
+            "LLM_MODEL_NAME": llm.get("model", ""),
+            "LLM_API_BASE": llm.get("api_base", ""),
+            "TTS_PROVIDER": tts.get("provider", ""),
+            "TTS_MODEL_NAME": tts.get("model", ""),
+            "TTS_API_ENDPOINT": tts.get("api_endpoint", ""),
+            "TTS_VOICE": tts.get("voice", ""),
+            "TTS_RESPONSE_FORMAT": tts.get("response_format", ""),
+            "TTS_SAMPLE_RATE": tts.get("sample_rate", ""),
+            "TTS_STREAM": tts.get("stream", False),
+            "LOG_LEVEL": runtime.get("log_level", "INFO"),
+        }
+        return mapping.get(key, "")
+
+    def _assign_field_value(
+        self,
+        key: str,
+        value: object,
+        capture: dict[str, object],
+        vision: dict[str, object],
+        llm: dict[str, object],
+        tts: dict[str, object],
+        runtime: dict[str, object],
+    ) -> None:
+        if key == "AUTO_SELECT_REGION":
+            capture["auto_select_region"] = bool(value)
+        elif key == "SCREENSHOT_INTERVAL":
+            capture["screenshot_interval"] = float(value or 0.5)
+        elif key == "VISION_TIMEOUT_SECONDS":
+            capture["vision_timeout_seconds"] = float(value or 300)
+        elif key == "VISION_MODEL_NAME":
+            vision["model"] = str(value)
+        elif key == "VISION_API_BASE":
+            vision["api_base"] = str(value)
+        elif key == "LLM_MODEL_NAME":
+            llm["model"] = str(value)
+        elif key == "LLM_API_BASE":
+            llm["api_base"] = str(value)
+        elif key == "TTS_PROVIDER":
+            tts["provider"] = str(value)
+        elif key == "TTS_MODEL_NAME":
+            tts["model"] = str(value)
+        elif key == "TTS_API_ENDPOINT":
+            tts["api_endpoint"] = str(value)
+        elif key == "TTS_VOICE":
+            tts["voice"] = str(value)
+        elif key == "TTS_RESPONSE_FORMAT":
+            tts["response_format"] = str(value)
+        elif key == "TTS_SAMPLE_RATE":
+            tts["sample_rate"] = int(value or 32000)
+        elif key == "TTS_STREAM":
+            tts["stream"] = bool(value)
+        elif key == "LOG_LEVEL":
+            runtime["log_level"] = str(value).upper()
+
+    def _write_runtime_region_file_if_present(self, values: dict[str, object]) -> None:
+        capture = values.get("capture", {})
+        region_payload = capture.get("barrage_region", {})
+        try:
+            region = (
+                int(region_payload.get("x")),
+                int(region_payload.get("y")),
+                int(region_payload.get("w")),
+                int(region_payload.get("h")),
+            )
+        except (TypeError, ValueError):
+            return
+        self._write_runtime_region_file(region)
 
     def choose_static_image(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
@@ -882,13 +1103,21 @@ class LiveSoulMainWindow(QMainWindow):
         )
         if not file_path:
             return
-        values = self.env_editor.load()
-        values["SCREENSHOT_IMAGE_PATH"] = file_path
-        self.env_editor.save_values({"SCREENSHOT_IMAGE_PATH": file_path})
+        payload = dict(self.current_settings_payload or self.config_store.load())
+        capture = dict(payload.get("capture", {}))
+        capture["screenshot_image_path"] = file_path
+        payload["capture"] = capture
+        self.current_settings_payload = payload
+        self.config_store.save(payload)
         self.status_summary.setText("已启用静态截图模式。下次启动会重复读取这张图片。")
 
     def clear_static_image(self) -> None:
-        self.env_editor.save_values({"SCREENSHOT_IMAGE_PATH": ""})
+        payload = dict(self.current_settings_payload or self.config_store.load())
+        capture = dict(payload.get("capture", {}))
+        capture["screenshot_image_path"] = ""
+        payload["capture"] = capture
+        self.current_settings_payload = payload
+        self.config_store.save(payload)
         self.status_summary.setText("已清除静态截图模式，后续会恢复真实抓屏。")
 
     def open_project_folder(self) -> None:
@@ -1055,7 +1284,7 @@ class LiveSoulMainWindow(QMainWindow):
         except Exception as exc:
             self.memory_preview.setPlainText(f"读取运行记忆失败：{exc}")
             return
-        updated_at = str(payload.get("updated_at", "") or "")
+        updated_at = self._display_timestamp(str(payload.get("updated_at", "") or ""))
         last_text = str(payload.get("last_recognized_text", "") or "")
         history = payload.get("dialogue_history", [])
 
@@ -1079,9 +1308,10 @@ class LiveSoulMainWindow(QMainWindow):
         if not log_path.exists():
             return
         text = log_path.read_text(encoding="utf-8", errors="replace")
-        tail = "\n".join(text.splitlines()[-80:])
-        if self.log_output.toPlainText().strip() != tail.strip() and self.process.state() == QProcess.ProcessState.NotRunning:
-            self.log_output.setPlainText(tail)
+        tail_lines = [line for line in text.splitlines()[-80:] if line.strip()]
+        if self.process.state() == QProcess.ProcessState.NotRunning and tail_lines != self.log_entries:
+            self.log_entries = tail_lines
+            self.log_output.setHtml("".join(self._render_log_line(line) for line in self.log_entries))
             self.log_output.moveCursor(QTextCursor.MoveOperation.End)
 
 

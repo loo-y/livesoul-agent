@@ -30,6 +30,17 @@ class SoulStore:
             parts.append(f"## {filename}\n{content}")
         return "\n\n".join(parts)
 
+    def load_llm_system_prompt(self) -> str:
+        path = self.config_dir / "LLM_SYSTEM.md"
+        try:
+            return path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            return (
+                "Generate one short spoken reply for the live stream. "
+                "Keep it concise, safe, and natural for voice output.\n\n"
+                "Avoid repeating the same wording as recent replies unless the context truly requires it."
+            )
+
 
 class AIAgent:
     def __init__(self, config: AppConfig) -> None:
@@ -62,6 +73,7 @@ class AIAgent:
         barrage_text: str,
         recent_context: list[tuple[str, str]],
     ) -> str:
+        llm_system_prompt = self.soul_store.load_llm_system_prompt()
         context_blocks = []
         for index, (recognized_text, reply_text) in enumerate(recent_context, start=1):
             context_blocks.append(
@@ -75,9 +87,7 @@ class AIAgent:
                     "role": "system",
                     "content": (
                         f"{soul_prompt}\n\n"
-                        "Generate one short spoken reply for the live stream. "
-                        "Keep it concise, safe, and natural for voice output.\n\n"
-                        "Avoid repeating the same wording as recent replies unless the context truly requires it.\n"
+                        f"{llm_system_prompt}\n\n"
                         f"Recent dialogue context:\n{context_text}"
                     ),
                 },

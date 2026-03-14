@@ -204,6 +204,7 @@ cython_debug/
 
 # LiveSoul runtime artifacts
 runtime/
+runtime/config.json
 runtime-sample.png
 
 # Marimo

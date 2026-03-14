@@ -50,7 +50,7 @@ class LiveSoulRuntime:
             return
         if self.config.barrage_region is None:
             raise RuntimeError(
-                "Barrage region is not configured. Set BARRAGE_REGION_* in .env or enable AUTO_SELECT_REGION."
+                "Barrage region is not configured. Set the capture region in runtime/config.json or enable automatic selection."
             )
 
     async def run(self) -> None:

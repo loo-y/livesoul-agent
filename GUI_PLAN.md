@@ -10,7 +10,7 @@
 4. 生成回复
 5. TTS 播放
 
-但当前仍然是开发者工作流，依赖：
+但当前仍然是开发者工作流，曾经依赖：
 
 - `pyenv-win`
 - `.venv`
@@ -29,7 +29,7 @@ GUI 的目标不是单纯加个界面，而是解决以下问题：
 - 用户不需要理解 Python 环境管理
 - 用户不需要手动编辑一堆配置文件才能运行
 - 用户可以通过界面完成启动、停止、选区、查看状态
-- 用户可以直接修改 `SOUL.md`、`IDENTITY.md`、`USER.md`
+- 用户可以直接修改 profile 下的 `SOUL.md`、`IDENTITY.md`、`USER.md`
 - 用户可以查看当前监控区域和最近识别结果
 - 后续便于打包成 Windows 安装包
 
@@ -96,9 +96,9 @@ GUI 的目标不是单纯加个界面，而是解决以下问题：
 
 功能：
 
-- 编辑 `agent_config/SOUL.md`
-- 编辑 `agent_config/IDENTITY.md`
-- 编辑 `agent_config/USER.md`
+- 编辑当前 profile 下的 `SOUL.md`
+- 编辑当前 profile 下的 `IDENTITY.md`
+- 编辑当前 profile 下的 `USER.md`
 - 保存按钮
 - 未保存提醒
 
@@ -127,7 +127,7 @@ GUI 的目标不是单纯加个界面，而是解决以下问题：
 
 目标：
 
-- 把常用配置从 `.env` 里搬到可视化界面
+- 把常用配置从 `runtime/config.json` 搬到可视化界面
 
 ### 5. 运行日志
 
@@ -227,16 +227,17 @@ GUI 不应直接阻塞在主线程里跑现有 runtime。
 
 ## 配置管理建议
 
-当前很多配置在 `.env`。
+当前很多配置已经迁移到 `runtime/config.json`。
 
 如果未来面向普通用户，建议逐步调整为：
 
-- 用户常用配置写到 `runtime/settings.json`
-- 开发者兼容配置继续保留 `.env`
-- GUI 默认读写 `settings.json`
+- 用户常用配置写到 `runtime/config.json`
+- 默认模板写到 `default_config.json`
+- legacy 兼容配置可暂时保留 `.env`
+- GUI 默认读写 `runtime/config.json`
 - 启动时统一映射成现有的 `AppConfig`
 
-`SOUL.md`、`IDENTITY.md`、`USER.md` 可以继续保留文件形式，GUI 只负责编辑它们。
+`SOUL.md`、`IDENTITY.md`、`USER.md` 继续保留文件形式，但应放入 `profiles/<profile_id>/`，GUI 负责切换并编辑当前 profile。
 
 ## 跨平台策略
 

@@ -36,6 +36,8 @@
 - 接入并验证了 MiniMax TTS
 - 新增并验证了 SiliconFlow TTS
 - 新增了第一版桌面 GUI 入口 `src/gui_app.py`
+- 配置主存储已从 `.env` 迁移到 `default_config.json + runtime/config.json`
+- 人设主存储已从 `agent_config/` 迁移到 `profiles/<profile_id>/`
 - 配置项已从 `TTS_API_BASE` 迁移为 `TTS_API_ENDPOINT`，并保留旧字段兼容
 - `.env.example` 已同步更新
 
@@ -43,6 +45,8 @@
 
 - 入口：[src/main.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/main.py)
 - 配置：[src/config.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/config.py)
+- 默认配置模板：[default_config.json](/Users/luyi/Code/GithubCode/livesoul-agent/default_config.json)
+- 默认人设目录：[profiles/default](/Users/luyi/Code/GithubCode/livesoul-agent/profiles/default)
 - 截图：[src/screenshot.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/screenshot.py)
 - 区域框选：[src/region_selector.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/region_selector.py)
 - OCR：[src/ocr_module.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/ocr_module.py)
@@ -58,12 +62,13 @@
 
 推荐配置方式：
 
-- `AUTO_SELECT_REGION=true`
-- 每次启动程序后手动框选弹幕区域
-- `VISION_TIMEOUT_SECONDS` 控制视觉识别超时
-- `TTS_PROVIDER=minimaxi`
-- `TTS_API_ENDPOINT=https://api.minimaxi.com/v1/t2a_v2`
-- `MEMORY_DIR=runtime/memory`
+- 提交到 Git 的默认模板使用 [default_config.json](/Users/luyi/Code/GithubCode/livesoul-agent/default_config.json)
+- 本机真实配置使用 `runtime/config.json`
+- 当前激活的人设由 `active_profile_id` 指向 `profiles/<profile_id>/`
+- `capture.auto_select_region=true`
+- `capture.vision_timeout_seconds` 控制视觉识别超时
+- `tts.provider=siliconflow` 或 `tts.provider=minimaxi`
+- `runtime.memory_dir=runtime/memory`
 
 如果切到 SiliconFlow，当前推荐：
 
@@ -111,6 +116,164 @@
 - GUI 当前已经较可用，但文案、布局、缩放与交互细节还需要继续打磨
 - 没有自动化测试
 - 还没有打包成桌面应用
+
+### 2026-03-14 GUI 与配置系统迭代
+
+#### 今天实际遇到的问题
+
+- 第一版 GUI 虽然已经能启动和运行，但配置系统仍处在 `.env` 向 JSON 迁移的中间态，界面保存配置后容易出现值来源混杂，不利于后续分发。
+- 文本模型和视觉模型的提示词仍然写死在代码里，用户只能调整人设提示词，无法直接针对“回复质量不好”或“视觉识别风格不对”做精细调参。
+- 实时日志区域最初只是纯文本追加：
+  - `INFO / WARNING / ERROR` 没有颜色区分
+  - 每条日志之间没有明显间隔
+  - 时间戳直接显示毫秒和时区偏移，不适合普通用户阅读
+- GUI 头部右上角状态区之前直接复用了“最新日志”式文案，导致内容过长时折行挤压，显示不完整。
+- 目前启动 GUI 还依赖手动输入命令，不符合后续面向普通用户的使用方式。
+
+#### 原因判断与结论
+
+- `.env` 适合作为开发期环境变量容器，不适合承担桌面应用长期配置源；当前更合理的结构是：
+  - 提交到 Git 的默认模板：`default_config.json`
+  - 本机真实配置：`runtime/config.json`
+  - 可切换的人设目录：`profiles/<profile_id>/`
+- 模型提示词与人设提示词应拆开管理，才能让用户在不改代码的前提下调节回答效果和视觉识别指令。
+- 日志区域应该从“终端文本视图”转成“桌面应用日志面板”，至少要解决级别区分、可读间距和时间显示问题。
+- 头部状态区不应该承载日志流，而应该只展示当前状态、下一步提示和用户级说明。
+- 一键启动脚本是 MVP 分发前的必要过渡方案，至少可以让非开发用户通过双击启动当前 GUI。
+
+#### 这次已经落地的修复
+
+- [src/config.py](/C:/Users/luyi1/code/github/livesoul-agent/src/config.py)
+  - JSON 配置体系已成为主路径。
+  - `runtime/config.json` 由 GUI 和 runtime 共同读写。
+  - `.env` 仅保留首次迁移兼容，不再作为主配置源。
+- [default_config.json](/C:/Users/luyi1/code/github/livesoul-agent/default_config.json)
+  - 新增并提交默认配置模板。
+  - 作为后续安装包和首次启动初始化的基线配置。
+- [profiles/default](/C:/Users/luyi1/code/github/livesoul-agent/profiles/default)
+  - 默认 profile 目录已补齐。
+  - 在原有 `SOUL.md`、`IDENTITY.md`、`USER.md` 之外，新增：
+    - [profiles/default/LLM_SYSTEM.md](/C:/Users/luyi1/code/github/livesoul-agent/profiles/default/LLM_SYSTEM.md)
+    - [profiles/default/VISION_PROMPT.md](/C:/Users/luyi1/code/github/livesoul-agent/profiles/default/VISION_PROMPT.md)
+- [src/ai_agent.py](/C:/Users/luyi1/code/github/livesoul-agent/src/ai_agent.py)
+  - 文本模型系统提示词不再写死在代码里。
+  - 运行时会读取当前 profile 下的 `LLM_SYSTEM.md`。
+- [src/vision_module.py](/C:/Users/luyi1/code/github/livesoul-agent/src/vision_module.py)
+  - 视觉识别提示词不再写死在代码里。
+  - 运行时会读取当前 profile 下的 `VISION_PROMPT.md`。
+- [src/gui_app.py](/C:/Users/luyi1/code/github/livesoul-agent/src/gui_app.py)
+  - 人设页已扩展为 5 份可编辑文件，而不再只有 3 份。
+  - 实时日志改成富文本卡片展示：
+    - 按 `DEBUG / INFO / WARNING / ERROR / CRITICAL` 着色
+    - 每条日志之间增加明显间距
+    - 不再挤成一整块终端文本
+  - 日志时间展示已统一处理为“本地时间，精确到秒”。
+  - 头部右上角状态区已从“日志回显”改为单独状态面板，修复折行后显示不全的问题。
+  - 头部、页签、按钮和状态区的视觉样式做了一轮收口，当前更接近桌面产品界面而不是调试面板。
+- [launch_gui.cmd](/C:/Users/luyi1/code/github/livesoul-agent/launch_gui.cmd)
+  - 新增 Windows 一键启动脚本。
+  - 双击后会自动激活当前 `.venv` 并启动 GUI。
+- [README.md](/C:/Users/luyi1/code/github/livesoul-agent/README.md)
+  - 已同步更新 JSON 配置、5 份提示词文件和 `launch_gui.cmd` 的使用说明。
+
+#### 已验证结果
+
+- `python -m compileall src` 通过。
+- GUI 冒烟测试通过：
+  - 主窗口可以正常拉起并自动退出。
+- 实际重新启动 GUI 后已验证：
+  - 当前版本可正常打开
+  - 新的提示词编辑区已接入
+  - 一键启动脚本已可用
+  - 日志面板可按级别渲染样式
+  - 时间显示已从“UTC+偏移”调整为本地时间
+
+#### 当前仍存在的问题 / 边界
+
+- 现在仍然是开发态 GUI，不是正式安装包。
+- `launch_gui.cmd` 只是过渡方案，最终仍然应做成真正的安装器或可执行桌面应用。
+- 当前 profile 只支持“切换现有目录”，还不支持在 GUI 内新建 / 复制 / 删除 profile。
+- 模型提示词已经放开，但还没有做模板化说明、变量提示或“恢复默认值”功能。
+- 日志面板已明显可读，但还没有筛选、搜索、清空或导出能力。
+
+#### 最终想实现的产品目标
+
+- 最终交付物仍然应是面向普通用户的 Windows 安装包或桌面应用，而不是要求用户自己理解 Python 环境和启动命令。
+- 用户下载安装后，应该能直接：
+  - 双击启动
+  - 选择监控区域
+  - 调整人设和模型提示词
+  - 查看运行状态和日志
+  - 不需要面对 `.venv`、`pip install`、命令行或外部依赖说明
+
+#### 后续 TODO
+
+1. 继续完善 profile 管理
+   - 在 GUI 内支持新建 / 复制 / 删除 profile。
+   - 这样用户可以维护多套不同主播风格和直播场景的人设，而不是只能复用一个默认目录。
+
+2. 完善提示词编辑体验
+   - 给 `LLM_SYSTEM.md` 和 `VISION_PROMPT.md` 增加默认模板说明、重置默认值、字段解释。
+   - 这样用户调整效果时，不需要猜这些文件应该怎么写。
+
+3. 继续打磨日志面板
+   - 增加筛选、清空、搜索、导出。
+   - 这样日志区域才能从“可看”变成“可排障”。
+
+4. 做真正的分发入口
+   - 当前 `launch_gui.cmd` 只是过渡。
+   - 后续需要继续推进到 `PyInstaller + 安装包`，并逐步把外部依赖准备流程收进首次启动体验里。
+
+### 2026-03-14 配置存储重构
+
+#### 今天实际遇到的问题
+
+- 当前 GUI 仍然读写 `.env`，而 `.env` 更适合开发环境，不适合作为桌面应用的主配置存储。
+- `TTS_PROVIDER`、`TTS_API_ENDPOINT`、`TTS_MODEL_NAME` 这种有关联关系的配置在 `.env` 里容易被保存成错配状态，导致运行时调用失败。
+- `SOUL.md`、`IDENTITY.md`、`USER.md` 目前只有一套固定文件，不适合未来做多个人设切换。
+
+#### 原因判断与结论
+
+- `.env` 不适合承担“桌面 GUI 主配置 + 多配置切换 + 未来分发安装”的职责。
+- 机器配置应该改成结构化 JSON。
+- 人设文本仍然适合保留为 Markdown，但需要放进 profile 目录体系里。
+
+#### 这次已经落地的修复
+
+- [src/config.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/config.py)
+  - 重构为 JSON 配置中心。
+  - 默认模板来自 [default_config.json](/Users/luyi/Code/GithubCode/livesoul-agent/default_config.json)。
+  - 本机实际配置使用 `runtime/config.json`。
+  - 如果 `runtime/config.json` 不存在，会优先尝试从旧 `.env` 迁移，否则复制默认模板。
+- [profiles/default](/Users/luyi/Code/GithubCode/livesoul-agent/profiles/default)
+  - 新增默认 profile 目录。
+  - `SOUL.md`、`IDENTITY.md`、`USER.md` 迁移到 `profiles/default/`。
+  - 新增 `meta.json` 描述 profile 信息。
+- [src/gui_app.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/gui_app.py)
+  - GUI 不再把 `.env` 当主配置源。
+  - 改为读写 `runtime/config.json`。
+  - 提示词编辑改为读写当前 `active_profile_id` 对应的 profile 目录。
+  - 新增 profile 下拉切换入口，为后续多套人设切换打基础。
+- [.gitignore](/Users/luyi/Code/GithubCode/livesoul-agent/.gitignore)
+  - 明确忽略 `runtime/config.json`。
+
+#### 当前结论
+
+- 配置系统已经完成从 `.env` 到 JSON 的主存储迁移。
+- 后续桌面 GUI 和未来安装包都应该围绕：
+  - 可提交的默认模板：`default_config.json`
+  - 本机真实配置：`runtime/config.json`
+  - 多人设目录：`profiles/<profile_id>/`
+
+#### 后续 TODO
+
+1. 继续把 GUI 细节适配到 JSON 配置
+   - 增加更明确的 provider / endpoint / model 弱提醒
+   - 后续支持新增 / 复制 / 删除 profile
+
+2. 清理旧 `.env` 路径
+   - 目前保留 `.env` 仅用于迁移兼容
+   - 后续可以在文档和代码里逐步降级为 legacy
 
 ## 下次建议优先继续的方向
 
@@ -269,7 +432,6 @@
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
 python -m src.main
 ```
 
@@ -279,7 +441,6 @@ python -m src.main
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-copy .env.example .env
 python -m src.main
 ```
 

@@ -30,9 +30,21 @@ class VisionModule:
             return "", 0.0
         return await asyncio.to_thread(self._recognize_sync, image_path)
 
+    def _load_vision_prompt(self) -> str:
+        path = self.config.agent_config_dir / "VISION_PROMPT.md"
+        try:
+            return path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            return (
+                "Read the live-stream chat text from this image. "
+                "Return only the readable chat content, one message per line. "
+                "If there is no readable chat text, return an empty string."
+            )
+
     def _recognize_sync(self, image_path: Path) -> tuple[str, float]:
         image_bytes = image_path.read_bytes()
         b64 = base64.b64encode(image_bytes).decode("utf-8")
+        vision_prompt = self._load_vision_prompt()
         response = self.client.responses.create(
             model=self.config.vision_model_name,
             input=[
@@ -41,11 +53,7 @@ class VisionModule:
                     "content": [
                         {
                             "type": "input_text",
-                            "text": (
-                                "Read the live-stream chat text from this image. "
-                                "Return only the readable chat content, one message per line. "
-                                "If there is no readable chat text, return an empty string."
-                            ),
+                            "text": vision_prompt,
                         },
                         {
                             "type": "input_image",

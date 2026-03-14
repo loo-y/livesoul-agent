@@ -8,12 +8,14 @@
 
 - 截图直播画面并裁剪弹幕区域
 - 优先使用视觉模型识别弹幕，超时或失败时回退到 OCR
-- 动态加载 `agent_config/SOUL.md`、`IDENTITY.md`、`USER.md`
+- 动态加载 `profiles/<profile_id>/SOUL.md`、`IDENTITY.md`、`USER.md`
+- 支持为文本模型和视觉模型分别维护独立提示词：`LLM_SYSTEM.md`、`VISION_PROMPT.md`
 - 生成适合直播口播的短回复
 - 支持 `console`、`minimaxi`、`siliconflow`、`openai`、`edge`、`pyttsx3` 六种 TTS 方式
 - 持久化最近弹幕和最近几轮 `(弹幕 -> 回复)` 上下文
 - 使用串行流水线执行整条处理链路，避免前一轮 TTS 未结束就开始下一轮
 - 提供第一版桌面 GUI，可在一个窗口内启动/停止程序、编辑人设、查看日志和预览
+- 实时日志支持按级别着色显示，并以本地时间展示到秒
 
 ## 当前状态
 
@@ -27,12 +29,13 @@
 
 ```text
 livesoul-agent/
-├── agent_config/
+├── profiles/
 ├── src/
 ├── runtime/
+├── default_config.json
 ├── README.md
 ├── requirements.txt
-└── .env.example
+└── .gitignore
 ```
 
 ## 平台支持
@@ -57,7 +60,6 @@ livesoul-agent/
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
 ```
 
 如果你要用 `pytesseract`，建议再装：
@@ -76,12 +78,21 @@ brew install tesseract tesseract-lang
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-copy .env.example .env
 ```
 
 ## 配置
 
-默认行为已经改成“每次启动时都手动框选弹幕区域”。程序启动后会弹出一个全屏选择器：
+默认行为已经改成“每次启动时都手动框选弹幕区域”。首次运行时，程序会根据 [default_config.json](/C:/Users/luyi1/code/github/livesoul-agent/default_config.json) 自动生成本机配置文件 `runtime/config.json`，之后 GUI 和 runtime 都读写这份本机配置。
+
+每套人设保存在 `profiles/<profile_id>/` 下，当前默认包含 5 份可编辑文件：
+
+- `SOUL.md`
+- `IDENTITY.md`
+- `USER.md`
+- `LLM_SYSTEM.md`
+- `VISION_PROMPT.md`
+
+程序启动后会弹出一个全屏选择器：
 
 1. 程序先抓取当前屏幕
 2. 你用鼠标拖一个框选中弹幕区域
@@ -92,14 +103,14 @@ copy .env.example .env
 
 - `AUTO_SELECT_REGION=true`
 
-常用运行配置：
+常用运行配置现在保存在 `runtime/config.json`：
 
 - `SCREENSHOT_INTERVAL`：截图频率
 - `VISION_TIMEOUT_SECONDS`：视觉识别超时时间，超时后回退到 OCR
-- `TTS_PROVIDER`：当前 `.env.example` 默认 `minimaxi`，也支持 `siliconflow`
+- `tts.provider`：当前默认 `minimaxi`，也支持 `siliconflow`
 - `MEMORY_DIR`：运行记忆文件目录
 
-如需启用真实模型：
+如需启用真实模型，请编辑 `runtime/config.json` 或通过 GUI 保存：
 
 - 视觉识别：填写 `VISION_API_KEY`、`VISION_MODEL_NAME`、`VISION_API_BASE`
 - 文本生成：填写 `LLM_API_KEY`、`LLM_MODEL_NAME`、`LLM_API_BASE`
@@ -147,14 +158,19 @@ python -m src.main
 python -m src.gui_app
 ```
 
+Windows 下也可以直接双击 [launch_gui.cmd](/C:/Users/luyi1/code/github/livesoul-agent/launch_gui.cmd) 一键启动 GUI。
+
 GUI 当前支持：
 
 - 启动 / 停止运行时
-- 编辑 `SOUL.md`、`IDENTITY.md`、`USER.md`
-- 编辑常用 `.env` 配置
+- 编辑当前 profile 的 `SOUL.md`、`IDENTITY.md`、`USER.md`
+- 编辑当前 profile 的 `LLM_SYSTEM.md`、`VISION_PROMPT.md`
+- 切换不同 profile
+- 编辑常用 `runtime/config.json` 配置
 - 仅暴露当前实际在用的 TTS 供应商：`minimaxi`、`siliconflow`
 - 显示 / 隐藏 API Key 明文
-- 查看运行日志
+- 查看带颜色区分的运行日志
+- 日志时间以本地时间显示，精确到秒
 - 查看最新裁剪帧和最近记忆快照
 - 窗口置顶
 - 显示常驻监控框
@@ -178,13 +194,14 @@ GUI 当前支持：
 
 ## 说明
 
-- `SOUL.md`、`IDENTITY.md`、`USER.md` 每次生成回复时都会重新读取，修改后可即时生效。
+- 当前激活 profile 下的 `SOUL.md`、`IDENTITY.md`、`USER.md` 每次生成回复时都会重新读取，修改后可即时生效。
 - OCR、视觉模型、LLM、TTS 都做成了独立模块，方便替换实现。
 - 程序会把最近一次识别出的弹幕和最近几轮 `(弹幕 -> 回复)` 持久化到 `runtime/memory/session_memory.json`，同时生成便于查看的 `runtime/memory/session_memory.html`。
 - LLM 会带上最近几轮本地上下文，降低重复回复概率。
 - 如果当前截图识别结果与上一轮完全一致，会跳过 LLM 和 TTS，避免弹幕未变化时重复说话。
 - 默认配置偏向“先跑起来”。如果本机未安装 OCR / TTS 依赖或未配置 API，程序会降级为日志输出，而不是直接崩溃。
 - 启动时会自动输出平台兼容性检查日志，尤其会提示 macOS 屏幕录制权限和本地依赖缺失问题。
+- `runtime/config.json` 是本机配置文件，不提交到 Git；[default_config.json](/C:/Users/luyi1/code/github/livesoul-agent/default_config.json) 是可提交的默认模板。
 
 ## TODO
 

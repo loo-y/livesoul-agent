@@ -1,0 +1,51 @@
+{
+  "active_profile_id": "default",
+  "capture": {
+    "ocr_confidence_threshold": 0.8,
+    "vision_timeout_seconds": 300.0,
+    "screenshot_interval": 0.5,
+    "auto_select_region": true,
+    "screenshot_backend": "auto",
+    "screenshot_monitor": 1,
+    "screenshot_image_path": "",
+    "barrage_region": {
+      "x": null,
+      "y": null,
+      "w": null,
+      "h": null
+    }
+  },
+  "vision": {
+    "api_key": "",
+    "model": "gpt-4.1-mini",
+    "api_base": "https://api.openai.com/v1"
+  },
+  "llm": {
+    "api_key": "",
+    "model": "gpt-4.1-mini",
+    "api_base": "https://api.openai.com/v1"
+  },
+  "tts": {
+    "provider": "minimaxi",
+    "api_key": "",
+    "model": "speech-2.8-turbo",
+    "api_endpoint": "https://api.minimaxi.com/v1/t2a_v2",
+    "voice": "female-shaonv-jingpin",
+    "response_format": "mp3",
+    "sample_rate": 32000,
+    "stream": false,
+    "speed": 1.0,
+    "gain": 0.0,
+    "output_dir": "runtime/audio"
+  },
+  "runtime": {
+    "memory_dir": "runtime/memory",
+    "log_level": "INFO",
+    "dedup_window_seconds": 8,
+    "queue_maxsize": 50
+  },
+  "ui": {
+    "window_pinned": false,
+    "show_region_overlay": true
+  }
+}
