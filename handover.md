@@ -292,6 +292,98 @@
    - 绿色包路线已经打通。
    - 下一阶段再决定是否进入 `PyInstaller + Inno Setup/MSIX` 的安装器阶段。
 
+### 2026-03-15 移除 OCR 并内置 ffplay
+
+#### 今天实际遇到的问题
+
+- 用户明确要求当前版本不要再保留 OCR 回退，运行链路应完全依赖视觉模型。
+- 之前绿色包虽然已经能打出来，但 runtime 体积很大，核心原因是依赖链仍然把 `easyocr / pytesseract / torch / torchvision / scipy` 带了进去。
+- 之前绿色包虽然已经打通，但还没有把 `ffplay` 一起放进包里，目标机器上的音频播放仍然可能受系统是否安装 FFmpeg 影响。
+- 便携包烟测时还额外暴露出一个配置读取问题：如果 `runtime/config.json` 由 PowerShell 带 BOM 写出，当前 loader 会直接报 `JSONDecodeError: Unexpected UTF-8 BOM`。
+
+#### 原因判断与结论
+
+- 既然当前产品策略已经决定“只依赖视觉模型”，那 OCR 相关代码和依赖继续保留只会：
+  - 增加包体积
+  - 增加启动检查噪音
+  - 增加维护复杂度
+- `ffplay` 属于当前 Windows 绿色包里的必要配套工具，应该直接放进包内，而不是继续依赖目标机器环境。
+- JSON 配置读取应兼容 `utf-8-sig`，否则绿色包在 Windows 上很容易被 BOM 编码坑到。
+
+#### 这次已经落地的修复
+
+- [src/main.py](/C:/Users/luyi1/code/github/livesoul-agent/src/main.py)
+  - 移除了 `OCRModule`。
+  - 识别链路改为只调用视觉模型。
+  - 当视觉模型超时或失败时，当前轮直接返回空结果，不再回退 OCR。
+- [src/ocr_module.py](/C:/Users/luyi1/code/github/livesoul-agent/src/ocr_module.py)
+  - 已删除。
+- [src/platform_support.py](/C:/Users/luyi1/code/github/livesoul-agent/src/platform_support.py)
+  - 移除了 OCR / `tesseract` 检查逻辑。
+  - 启动日志不再输出 OCR 相关警告。
+- [requirements.txt](/C:/Users/luyi1/code/github/livesoul-agent/requirements.txt)
+  - 移除了 `easyocr`
+  - 移除了 `pytesseract`
+- [src/tts_module.py](/C:/Users/luyi1/code/github/livesoul-agent/src/tts_module.py)
+  - 新增 `_resolve_ffplay()`。
+  - 在冻结态运行时优先查找绿色包内的 `tools/ffmpeg/bin/ffplay.exe`。
+  - 找不到项目内 `ffplay` 时才再回退到系统 PATH。
+- [scripts/build_portable.ps1](/C:/Users/luyi1/code/github/livesoul-agent/scripts/build_portable.ps1)
+  - 打包绿色包时会把本机 `C:\Program Files\ffmpeg\bin\ffplay.exe` 复制进：
+    - `dist/LiveSoul_Portable/tools/ffmpeg/bin/ffplay.exe`
+- [src/config.py](/C:/Users/luyi1/code/github/livesoul-agent/src/config.py)
+  - 默认配置和运行时配置读取已统一改成 `utf-8-sig`。
+  - 这样即使 `runtime/config.json` 带 BOM，也能正常加载。
+- [README.md](/C:/Users/luyi1/code/github/livesoul-agent/README.md)
+  - 已同步更新“当前不再依赖 OCR 回退、绿色包已内置 ffplay”的使用说明。
+
+#### 已验证结果
+
+- `python -m compileall src` 通过。
+- OCR 相关代码搜索已清理：
+  - runtime 主链路已不再引用 `OCRModule`
+  - `requirements.txt` 已不再包含 OCR 依赖
+- 重新构建绿色包后，实际结果为：
+  - [dist/LiveSoul_Portable/LiveSoulRuntime.exe](/C:/Users/luyi1/code/github/livesoul-agent/dist/LiveSoul_Portable/LiveSoulRuntime.exe) 体积约 `76 MB`
+  - 相比之前约 `241 MB` 明显下降
+- 绿色包内已确认存在：
+  - [dist/LiveSoul_Portable/tools/ffmpeg/bin/ffplay.exe](/C:/Users/luyi1/code/github/livesoul-agent/dist/LiveSoul_Portable/tools/ffmpeg/bin/ffplay.exe)
+- 打包后的 GUI exe 已验证可正常启动。
+- 打包后的 runtime exe 已做烟测，日志确认：
+  - 主循环可以正常启动
+  - 启动时不再出现 OCR / `tesseract` 检查日志
+  - BOM 编码配置文件已可正常读取
+
+#### 当前仍存在的问题 / 边界
+
+- 当前识别链路完全依赖视觉模型，因此如果视觉接口不可用，就不会再有 OCR 兜底。
+- `LiveSoulRuntime.exe` 虽然已经显著缩小，但对绿色包来说仍然不算小。
+- 当前内置的是 `ffplay.exe`，还不是完整的 FFmpeg 工具链。
+- 绿色包依然需要用户自己填写视觉模型、LLM、TTS 的 API 配置。
+
+#### 最终想实现的产品目标
+
+- 当前路线已经从“开发态命令行项目”推进到“可分发的 Windows 绿色包”。
+- 最终目标仍然是：
+  - 普通用户拿到包后直接双击启动
+  - 首次进入图形化引导
+  - 自动准备必要工具
+  - 不需要理解 Python、OCR、FFmpeg、环境变量
+
+#### 后续 TODO
+
+1. 做首启配置引导
+   - 当前绿色包虽然能启动，但首次使用仍然要用户手动理解配置结构。
+   - 后续应把 API Key、模型地址、默认 provider 等收进 GUI 引导流程。
+
+2. 优化视觉模型不可用时的用户反馈
+   - 现在移除 OCR 之后，视觉模型不可用就会直接没有识别结果。
+   - 后续需要把这种情况在 GUI 里做成更明确的提示，而不是只留在日志里。
+
+3. 继续收分发体验
+   - 当前已经内置 `ffplay`，后续可以再决定是否补 `ffmpeg` / `ffprobe`。
+   - 也可以继续推进到正式安装器，而不是只停留在绿色包阶段。
+
 ### 2026-03-14 配置存储重构
 
 #### 今天实际遇到的问题
