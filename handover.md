@@ -7,9 +7,8 @@
 1. 截图当前屏幕
 2. 启动时手动框选弹幕区域
 3. 优先调用视觉模型识别弹幕
-4. 视觉模型超时或失败时回退到 OCR
-5. 调用 AI 生成回复
-6. 调用 TTS 播放回复
+4. 调用 AI 生成回复
+5. 调用 TTS 播放回复
 
 当前流程已经改成严格串行：
 
@@ -22,9 +21,7 @@
 ## 这次已经完成的改动
 
 - 把 LLM 接口从 `responses.create(...)` 改成了 `chat.completions.create(...)`，已适配当前使用的 iflow 兼容接口
-- 验证并保留了视觉模型主路径，当前真实截图场景下明显优于 OCR
-- 把识别策略改成“视觉优先，超时后回退到 OCR”
-- 修复了 EasyOCR 的本地模型损坏和输入类型问题，OCR 已恢复为可运行回退方案
+- 验证并保留了视觉模型主路径，当前已改成完全依赖视觉模型识别
 - 把运行时从多队列并发改成串行流水线，避免 TTS 未播完就开始下一轮
 - 增加了本地记忆：
   - 最近一次识别出的弹幕快照
@@ -49,7 +46,6 @@
 - 默认人设目录：[profiles/default](/Users/luyi/Code/GithubCode/livesoul-agent/profiles/default)
 - 截图：[src/screenshot.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/screenshot.py)
 - 区域框选：[src/region_selector.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/region_selector.py)
-- OCR：[src/ocr_module.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/ocr_module.py)
 - 视觉回退：[src/vision_module.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/vision_module.py)
 - AI Agent：[src/ai_agent.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/ai_agent.py)
 - TTS：[src/tts_module.py](/Users/luyi/Code/GithubCode/livesoul-agent/src/tts_module.py)
@@ -100,7 +96,7 @@
 - SiliconFlow TTS 真实调用通过：
   - `opus` 返回和文件落地通过
   - `mp3 + 44100Hz` 端到端通过
-- 真实直播截图验证过：视觉模型识别质量明显优于 OCR
+- 真实直播截图验证过：视觉模型识别已能承担主链路
 - 运行记忆文件会自动生成：
   - `runtime/memory/session_memory.json`
   - `runtime/memory/session_memory.html`
@@ -108,8 +104,6 @@
 ## 当前已知问题 / 边界
 
 - 还没有真正做“窗口级捕获”，当前仍是整屏截图后裁剪
-- OCR 可作为回退，但在真实弹幕场景下质量仍明显不如视觉模型
-- `pytesseract` 依赖系统 `tesseract`，当前这台机器未装
 - TTS 播放目前仍是系统播放，还没接 OBS 音频路由
 - SiliconFlow 如果使用 `mp3`，采样率必须是 `32000` 或 `44100`
 - GUI 当前只支持拖动监控框位置，不支持直接拖动改变宽高
@@ -223,6 +217,80 @@
 4. 做真正的分发入口
    - 当前 `launch_gui.cmd` 只是过渡。
    - 后续需要继续推进到 `PyInstaller + 安装包`，并逐步把外部依赖准备流程收进首次启动体验里。
+
+### 2026-03-15 绿色分发包打包
+
+#### 今天实际遇到的问题
+
+- 用户希望的不只是源码仓库里的“一键启动”，而是可以直接发给其他 Windows 用户使用的绿色包。
+- 当前 GUI 和 runtime 仍默认按源码仓库方式运行：
+  - GUI 里通过 `python -m src.main` 拉起 runtime
+  - 多个模块默认按源码目录推导资源路径
+- 如果直接把现有仓库压缩发给别人，对方仍然需要 Python、`.venv` 和依赖，达不到“开箱即用”。
+
+#### 原因判断与结论
+
+- 要做成当前阶段最实用的分发方式，不是先做安装器，而是先做一个 `PyInstaller` 绿色包目录。
+- 这要求把 GUI 和 runtime 拆成两个可执行文件：
+  - GUI exe 负责桌面界面
+  - runtime exe 负责实际截图、识别、回复和 TTS 主循环
+- 同时需要把默认配置和默认 profile 一起放到可执行文件旁边，而不是继续依赖源码目录。
+
+#### 这次已经落地的修复
+
+- [src/config.py](/C:/Users/luyi1/code/github/livesoul-agent/src/config.py)
+  - 新增冻结态路径解析。
+  - 当程序以打包 exe 运行时，会优先以可执行文件所在目录作为配置根目录。
+- [src/gui_app.py](/C:/Users/luyi1/code/github/livesoul-agent/src/gui_app.py)
+  - 新增冻结态根目录解析。
+  - GUI 在打包后不再尝试 `python -m src.main`，而是改为拉起同目录下的 `LiveSoulRuntime.exe`。
+- [packaging/gui_entry.py](/C:/Users/luyi1/code/github/livesoul-agent/packaging/gui_entry.py)
+  - 新增 GUI 打包入口。
+- [packaging/runtime_entry.py](/C:/Users/luyi1/code/github/livesoul-agent/packaging/runtime_entry.py)
+  - 新增 runtime 打包入口。
+- [scripts/build_portable.ps1](/C:/Users/luyi1/code/github/livesoul-agent/scripts/build_portable.ps1)
+  - 新增绿色包构建脚本。
+  - 负责：
+    - 构建 `LiveSoulGUI.exe`
+    - 构建 `LiveSoulRuntime.exe`
+    - 组装 `dist/LiveSoul_Portable/`
+    - 复制 `default_config.json`
+    - 复制 `profiles/default/`
+    - 初始化空的 `runtime/` 目录
+    - 生成绿色包入口 `Start-LiveSoul.cmd`
+
+#### 已验证结果
+
+- 已安装 `PyInstaller` 并成功完成本机构建。
+- 绿色包输出目录已生成：
+  - `dist/LiveSoul_Portable/`
+- 打包后的 GUI 可执行文件已成功启动。
+- 打包后的 runtime 可执行文件已做过最小烟测，确认能够真实拉起主循环。
+- 烟测产生的临时配置和日志已清理，当前 `dist/LiveSoul_Portable/` 目录保持为可分发状态。
+
+#### 当前仍存在的问题 / 边界
+
+- 这还是“绿色包”，不是正式安装器。
+- `LiveSoulRuntime.exe` 体积已经从约 241 MB 降到约 76 MB，但对绿色包来说仍然不算小。
+- 绿色包当前已内置 `ffplay.exe`。
+- 用户拿到绿色包后仍然需要填写自己的模型 API 配置。
+
+#### 最终想实现的产品目标
+
+- 当前绿色包已经能满足“解压后双击启动”的分发方式。
+- 但最终目标仍然应是：
+  - 更小体积
+  - 自动准备外部依赖
+  - 正式安装器或桌面应用分发形态
+
+#### 后续 TODO
+
+1. 做真正的首启引导
+   - 当前绿色包已经能双击启动，但首次使用时仍缺少“配置 API / 检查环境 / 引导选区”的产品化引导。
+
+2. 后续再评估正式安装器
+   - 绿色包路线已经打通。
+   - 下一阶段再决定是否进入 `PyInstaller + Inno Setup/MSIX` 的安装器阶段。
 
 ### 2026-03-14 配置存储重构
 

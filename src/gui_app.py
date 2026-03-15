@@ -44,7 +44,13 @@ except ImportError as exc:  # pragma: no cover - optional GUI dependency
     ) from exc
 
 
-ROOT = Path(__file__).resolve().parents[1]
+def _resolve_app_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[1]
+
+
+ROOT = _resolve_app_root()
 RUNTIME_CONFIG_JSON = ROOT / "runtime" / "config.json"
 PROFILES_DIR = ROOT / "profiles"
 PROMPT_FILE_SPECS = (
@@ -867,7 +873,13 @@ class LiveSoulMainWindow(QMainWindow):
         self.save_settings(silent=True)
         self.log_entries = []
         self.log_output.clear()
-        self.process.setArguments(["-u", "-m", "src.main"])
+        if getattr(sys, "frozen", False):
+            runtime_exe = ROOT / "LiveSoulRuntime.exe"
+            self.process.setProgram(str(runtime_exe))
+            self.process.setArguments([])
+        else:
+            self.process.setProgram(self.python_executable)
+            self.process.setArguments(["-u", "-m", "src.main"])
         self.process.start()
         if not self.process.waitForStarted(5000):
             QMessageBox.critical(self, "启动失败", "LiveSoul 运行进程未能成功启动。")

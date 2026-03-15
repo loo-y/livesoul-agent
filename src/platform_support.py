@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib.util
 import logging
 import platform
-import shutil
 
 from .config import AppConfig
 
@@ -24,7 +23,6 @@ class PlatformSupportChecker:
         self.log_runtime_summary()
         self._check_screen_capture_setup()
         self._check_region_selector_setup()
-        self._check_ocr_setup()
         self._check_tts_setup()
 
     def _check_screen_capture_setup(self) -> None:
@@ -60,22 +58,6 @@ class PlatformSupportChecker:
                 "`tkinter` is unavailable. Interactive region selection will fail. "
                 "Install a Python build with Tk support or disable AUTO_SELECT_REGION."
             )
-
-    def _check_ocr_setup(self) -> None:
-        has_easyocr = importlib.util.find_spec("easyocr") is not None
-        has_pytesseract = importlib.util.find_spec("pytesseract") is not None
-
-        if not has_easyocr and not has_pytesseract:
-            logger.warning(
-                "No OCR library detected. Install EasyOCR or pytesseract, otherwise only vision fallback can work."
-            )
-
-        if has_pytesseract and shutil.which("tesseract") is None:
-            logger.warning(
-                "`pytesseract` is installed but the `tesseract` binary was not found in PATH."
-            )
-            if self.system == "darwin":
-                logger.info("On macOS, install it with `brew install tesseract tesseract-lang`.")
 
     def _check_tts_setup(self) -> None:
         provider = self.config.tts_provider

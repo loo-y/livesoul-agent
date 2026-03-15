@@ -7,6 +7,7 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -207,7 +208,7 @@ class TTSModule:
             logger.warning("Audio playback failed for %s: %s", path, exc)
 
     def _play_file_windows(self, path: Path) -> None:
-        ffplay = shutil.which("ffplay")
+        ffplay = self._resolve_ffplay()
         if ffplay:
             subprocess.run(
                 [ffplay, "-nodisp", "-autoexit", "-loglevel", "error", str(path)],
@@ -219,7 +220,7 @@ class TTSModule:
     def _play_file_macos(self, path: Path) -> None:
         suffix = path.suffix.lower()
         if suffix in {".opus", ".ogg"}:
-            ffplay = shutil.which("ffplay")
+            ffplay = self._resolve_ffplay()
             if ffplay:
                 subprocess.run(
                     [ffplay, "-nodisp", "-autoexit", "-loglevel", "error", str(path)],
@@ -233,7 +234,7 @@ class TTSModule:
     def _play_file_other(self, path: Path) -> None:
         suffix = path.suffix.lower()
         if suffix in {".opus", ".ogg"}:
-            ffplay = shutil.which("ffplay")
+            ffplay = self._resolve_ffplay()
             if ffplay:
                 subprocess.run(
                     [ffplay, "-nodisp", "-autoexit", "-loglevel", "error", str(path)],
@@ -241,3 +242,18 @@ class TTSModule:
                 )
                 return
         subprocess.run(["xdg-open", str(path)], check=False)
+
+    def _resolve_ffplay(self) -> str | None:
+        candidates: list[Path] = []
+        if getattr(sys, "frozen", False):
+            base_dir = Path(sys.executable).resolve().parent
+            candidates.append(base_dir / "tools" / "ffmpeg" / "bin" / "ffplay.exe")
+            candidates.append(base_dir / "ffplay.exe")
+        else:
+            base_dir = Path.cwd()
+            candidates.append(base_dir / "tools" / "ffmpeg" / "bin" / "ffplay.exe")
+
+        for candidate in candidates:
+            if candidate.exists():
+                return str(candidate)
+        return shutil.which("ffplay")

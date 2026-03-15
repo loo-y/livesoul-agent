@@ -13,7 +13,6 @@ from .ai_agent import AIAgent
 from .config import load_config, setup_logging
 from .hotkey_listener import GlobalHotkeyListener
 from .models import FramePayload
-from .ocr_module import OCRModule
 from .platform_support import PlatformSupportChecker
 from .region_selector import RegionSelector
 from .screenshot import ScreenshotCapture
@@ -31,7 +30,6 @@ class LiveSoulRuntime:
         self.support_checker.run_startup_checks()
         self._prepare_barrage_region()
         self.capture = ScreenshotCapture(self.config)
-        self.ocr = OCRModule()
         self.vision = VisionModule(self.config)
         self.agent = AIAgent(self.config)
         self.tts = TTSModule(self.config)
@@ -113,15 +111,11 @@ class LiveSoulRuntime:
             if vision_text.strip():
                 return vision_text, vision_confidence, "vision"
         except TimeoutError:
-            logger.warning(
-                "Vision recognition timed out after %.1f seconds; falling back to OCR.",
-                self.config.vision_timeout_seconds,
-            )
+            logger.warning("Vision recognition timed out after %.1f seconds.", self.config.vision_timeout_seconds)
         except Exception as exc:
-            logger.warning("Vision recognition failed; falling back to OCR: %s", exc)
+            logger.warning("Vision recognition failed: %s", exc)
 
-        text, confidence, source = await self.ocr.recognize(frame.image_path)
-        return text, confidence, source
+        return "", 0.0, "vision"
 
     def _normalize_text(self, text: str) -> str:
         lines = [line.strip() for line in text.splitlines() if line.strip()]

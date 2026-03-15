@@ -1,13 +1,13 @@
 # LiveSoul Agent
 
-一个用于直播场景的 Python 原型项目：抓取弹幕区域、识别文字、生成 AI 回复，并把回复转成语音播放。
+一个用于直播场景的 Python 原型项目：抓取弹幕区域、用视觉模型识别文字、生成 AI 回复，并把回复转成语音播放。
 
 当前实现状态和后续建议整理在 [handover.md](/Users/luyi/Code/GithubCode/livesoul-agent/handover.md)。
 
 ## 功能
 
 - 截图直播画面并裁剪弹幕区域
-- 优先使用视觉模型识别弹幕，超时或失败时回退到 OCR
+- 使用视觉模型识别弹幕
 - 动态加载 `profiles/<profile_id>/SOUL.md`、`IDENTITY.md`、`USER.md`
 - 支持为文本模型和视觉模型分别维护独立提示词：`LLM_SYSTEM.md`、`VISION_PROMPT.md`
 - 生成适合直播口播的短回复
@@ -22,7 +22,7 @@
 - 已从纯设计文档落成可运行原型
 - 默认行为是每次启动时手动框选弹幕区域
 - 已明确支持 macOS 和 Windows
-- 已补启动诊断，便于定位权限、OCR、TTS 依赖问题
+- 已补启动诊断，便于定位权限、视觉模型、TTS 依赖问题
 - Windows 下已支持全局快捷键 `Ctrl+Alt+Q` 快速停止运行中的程序
 
 ## 项目结构
@@ -45,7 +45,7 @@ livesoul-agent/
 - macOS
 - Windows
 
-两端的核心能力一致：屏幕截图、手动框选弹幕区域、视觉识别、OCR 回退、AI 回复、TTS 输出。
+两端的核心能力一致：屏幕截图、手动框选弹幕区域、视觉识别、AI 回复、TTS 输出。
 
 差异主要在系统权限和本地依赖：
 
@@ -60,12 +60,6 @@ livesoul-agent/
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-如果你要用 `pytesseract`，建议再装：
-
-```bash
-brew install tesseract tesseract-lang
 ```
 
 第一次运行前，确认 macOS 已授予你的终端或 Python 应用以下权限：
@@ -106,7 +100,7 @@ pip install -r requirements.txt
 常用运行配置现在保存在 `runtime/config.json`：
 
 - `SCREENSHOT_INTERVAL`：截图频率
-- `VISION_TIMEOUT_SECONDS`：视觉识别超时时间，超时后回退到 OCR
+- `VISION_TIMEOUT_SECONDS`：视觉识别超时时间
 - `tts.provider`：当前默认 `minimaxi`，也支持 `siliconflow`
 - `MEMORY_DIR`：运行记忆文件目录
 
@@ -129,7 +123,7 @@ TTS 供应商补充说明：
 SCREENSHOT_IMAGE_PATH=/absolute/path/to/sample.png
 ```
 
-这样程序会反复读取同一张图片，便于验证 OCR / Agent / TTS 链路。
+这样程序会反复读取同一张图片，便于验证视觉识别 / Agent / TTS 链路。
 
 注意：设置了 `SCREENSHOT_IMAGE_PATH` 时，交互式框选不会启动，因为这时程序运行在静态图片模式。
 
@@ -160,6 +154,37 @@ python -m src.gui_app
 
 Windows 下也可以直接双击 [launch_gui.cmd](/C:/Users/luyi1/code/github/livesoul-agent/launch_gui.cmd) 一键启动 GUI。
 
+如果你要构建绿色分发包：
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\.venv\Scripts\Activate.ps1
+.\scripts\build_portable.ps1
+```
+
+构建完成后会生成：
+
+- `dist/LiveSoul_Portable/`
+
+这个目录就是当前的 Windows 绿色包。分发时直接整个目录打包给别人即可，对方解压后可以：
+
+- 双击 `Start-LiveSoul.cmd`
+- 或直接双击 `LiveSoulGUI.exe`
+
+当前绿色包已经包含：
+
+- GUI 可执行文件 `LiveSoulGUI.exe`
+- runtime 可执行文件 `LiveSoulRuntime.exe`
+- `default_config.json`
+- `profiles/default/`
+- 空的 `runtime/` 工作目录
+
+当前绿色包的已知边界：
+
+- 已内置 `tools/ffmpeg/bin/ffplay.exe`
+- 当前运行链路已移除 OCR 回退，不再依赖 `tesseract`
+- 真实使用时仍然需要用户填写自己的模型接口配置
+
 GUI 当前支持：
 
 - 启动 / 停止运行时
@@ -181,9 +206,8 @@ GUI 当前支持：
 1. 捕获画面
 2. 裁剪弹幕区域
 3. 视觉模型识别
-4. 超时或失败时回退到 OCR
-5. AI 生成回复
-6. TTS 播放
+4. AI 生成回复
+5. TTS 播放
 
 当前是严格串行执行：上一轮 TTS 未结束前，不会开始下一轮截图。
 
@@ -195,11 +219,11 @@ GUI 当前支持：
 ## 说明
 
 - 当前激活 profile 下的 `SOUL.md`、`IDENTITY.md`、`USER.md` 每次生成回复时都会重新读取，修改后可即时生效。
-- OCR、视觉模型、LLM、TTS 都做成了独立模块，方便替换实现。
+- 视觉模型、LLM、TTS 都做成了独立模块，方便替换实现。
 - 程序会把最近一次识别出的弹幕和最近几轮 `(弹幕 -> 回复)` 持久化到 `runtime/memory/session_memory.json`，同时生成便于查看的 `runtime/memory/session_memory.html`。
 - LLM 会带上最近几轮本地上下文，降低重复回复概率。
 - 如果当前截图识别结果与上一轮完全一致，会跳过 LLM 和 TTS，避免弹幕未变化时重复说话。
-- 默认配置偏向“先跑起来”。如果本机未安装 OCR / TTS 依赖或未配置 API，程序会降级为日志输出，而不是直接崩溃。
+- 默认配置偏向“先跑起来”。如果未配置模型 API 或 TTS 依赖不足，程序会降级为日志输出，而不是直接崩溃。
 - 启动时会自动输出平台兼容性检查日志，尤其会提示 macOS 屏幕录制权限和本地依赖缺失问题。
 - `runtime/config.json` 是本机配置文件，不提交到 Git；[default_config.json](/C:/Users/luyi1/code/github/livesoul-agent/default_config.json) 是可提交的默认模板。
 

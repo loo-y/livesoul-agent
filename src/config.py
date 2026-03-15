@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,14 @@ DEFAULT_CONFIG_FILENAME = "default_config.json"
 RUNTIME_CONFIG_RELATIVE = Path("runtime/config.json")
 LEGACY_ENV_FILENAME = ".env"
 PROFILES_DIRNAME = "profiles"
+
+
+def resolve_base_dir(base_dir: Path | None = None) -> Path:
+    if base_dir is not None:
+        return base_dir
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path.cwd()
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -123,7 +132,7 @@ def _legacy_env_path(base_dir: Path) -> Path:
 
 def _load_default_config(base_dir: Path) -> dict[str, Any]:
     path = _default_config_path(base_dir)
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
 def _migrate_legacy_env(base_dir: Path) -> dict[str, Any] | None:
@@ -184,7 +193,7 @@ def _migrate_legacy_env(base_dir: Path) -> dict[str, Any] | None:
 
 
 def ensure_runtime_config(base_dir: Path | None = None) -> Path:
-    base = base_dir or Path.cwd()
+    base = resolve_base_dir(base_dir)
     runtime_path = _runtime_config_path(base)
     if runtime_path.exists():
         return runtime_path
@@ -198,15 +207,15 @@ def ensure_runtime_config(base_dir: Path | None = None) -> Path:
 
 
 def load_settings(base_dir: Path | None = None) -> dict[str, Any]:
-    base = base_dir or Path.cwd()
+    base = resolve_base_dir(base_dir)
     runtime_path = ensure_runtime_config(base)
-    payload = json.loads(runtime_path.read_text(encoding="utf-8"))
+    payload = json.loads(runtime_path.read_text(encoding="utf-8-sig"))
     defaults = _load_default_config(base)
     return _deep_merge(defaults, payload)
 
 
 def save_settings(payload: dict[str, Any], base_dir: Path | None = None) -> Path:
-    base = base_dir or Path.cwd()
+    base = resolve_base_dir(base_dir)
     runtime_path = _runtime_config_path(base)
     runtime_path.parent.mkdir(parents=True, exist_ok=True)
     runtime_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -214,7 +223,7 @@ def save_settings(payload: dict[str, Any], base_dir: Path | None = None) -> Path
 
 
 def list_profiles(base_dir: Path | None = None) -> list[dict[str, str]]:
-    base = base_dir or Path.cwd()
+    base = resolve_base_dir(base_dir)
     profiles_dir = base / PROFILES_DIRNAME
     profiles: list[dict[str, str]] = []
     if not profiles_dir.exists():
@@ -237,7 +246,7 @@ def list_profiles(base_dir: Path | None = None) -> list[dict[str, str]]:
 
 
 def load_config(base_dir: Path | None = None) -> AppConfig:
-    base = base_dir or Path.cwd()
+    base = resolve_base_dir(base_dir)
     payload = load_settings(base)
 
     capture = payload.get("capture", {})
